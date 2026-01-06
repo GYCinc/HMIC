@@ -33,7 +33,7 @@ global.EventSource = class AuthenticatedEventSource extends EventSource {
     // Patch: Emit 'endpoint' event manually if server doesn't send it.
     this.addEventListener("open", () => {
       setTimeout(() => {
-        const endpointUrl = `${CORE_ENDPOINT}?source=GeminiCLI&session_id=${SESSION_ID}`;
+        const endpointUrl = `${CORE_ENDPOINT}?source=Antigravity&integrations=all&session_id=${SESSION_ID}`;
         // Global MessageEvent is available in Node 20
         const event = new global.MessageEvent("endpoint", {
           data: endpointUrl,
@@ -112,7 +112,7 @@ async function main() {
     // 1. Initialize Session via POST
     console.error("Initializing Core Session...");
     const initResponse = await originalFetch(
-      `${CORE_ENDPOINT}?source=GeminiCLI`,
+      `${CORE_ENDPOINT}?source=Antigravity&integrations=all`,
       {
         method: "POST",
         headers: {
