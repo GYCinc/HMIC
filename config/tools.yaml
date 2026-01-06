@@ -1,0 +1,73 @@
+version: '1.0'
+tools:
+  - id: filesystem
+    name: Filesystem Server
+    description: MCP filesystem access
+    command: npx
+    args: ['-y', '@modelcontextprotocol/server-filesystem', '${RAILWAY_VOLUME_MOUNT_PATH}']
+    resource_limits:
+      auto_restart: true
+      max_restarts: 3
+
+  - id: brave-search
+    name: Brave Search
+    description: Search the web with Brave
+    command: npx
+    args: ['-y', '@modelcontextprotocol/server-brave-search']
+    env:
+      BRAVE_API_KEY: ${BRAVE_API_KEY}
+    resource_limits:
+      auto_restart: true
+      max_restarts: 3
+
+  - id: github
+    name: GitHub
+    description: GitHub repository access
+    command: npx
+    args: ['-y', '@modelcontextprotocol/server-github']
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_TOKEN}
+    resource_limits:
+      auto_restart: true
+      max_restarts: 3
+
+  - id: huggingface
+    name: Hugging Face
+    description: Access Hugging Face models and datasets (Streaming HTTP)
+    command: npx
+    args: ['-y', '@llmindset/hf-mcp-server-http']
+    env:
+      HF_TOKEN: ${HF_TOKEN}
+      PORT: "3001"
+    resource_limits:
+      auto_restart: true
+      max_restarts: 3
+
+  # - id: chrome-devtools
+  #   name: Chrome DevTools
+  #   description: Headless Chrome for web interaction
+  #   command: npx
+  #   args: ['-y', 'chrome-devtools-mcp@latest', '--headless']
+  #   resource_limits:
+  #     auto_restart: true
+  #     max_restarts: 3
+
+  # - id: exa
+  #   name: Exa Search
+  #   description: AI-powered search engine
+  #   command: npx
+  #   args: ['-y', 'exa-mcp-server']
+  #   env:
+  #     EXA_API_KEY: ${EXA_API_KEY}
+  #   resource_limits:
+  #     auto_restart: true
+  #     max_restarts: 3
+
+  # - id: genkit
+  #   name: Genkit
+  #   description: Firebase Genkit MCP Server
+  #   command: npx
+  #   args: ['-y', 'genkit-cli@^1.22.0', 'mcp']
+  #   resource_limits:
+  #     auto_restart: true
+  #     max_restarts: 3

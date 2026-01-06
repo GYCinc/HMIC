@@ -1,0 +1,4 @@
+HTTP_USER           (Set in Railway dashboard for security)
+HTTP_PASSWORD       (Set in Railway dashboard for security)
+PORT=3000           (Already in railway.toml)
+NODE_ENV=production (Already in railway.toml)

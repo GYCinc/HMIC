@@ -1,0 +1,16 @@
+# RAILWAY SPECIFIC
+PORT=3000
+NODE_ENV=production
+LOG_LEVEL=info
+ALLOWED_ORIGINS=https://*.railway.app
+
+# Railway automatically provides these:
+# RAILWAY_VOLUME_MOUNT_PATH=/app/data
+
+# REQUIRED FOR SECURITY (set these in Railway dashboard)
+HTTP_USER=${RAILWAY_ENVIRONMENT_NAME}-admin
+HTTP_PASSWORD=changeme-${RAILWAY_GIT_COMMIT_SHA}
+
+# OPTIONAL TOOL CONFIGURATION
+# BRAVE_API_KEY=your_key_here
+# GITHUB_TOKEN=your_token_here

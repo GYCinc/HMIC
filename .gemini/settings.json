@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "": {
+      "command": "https://mcp.getcore.me/api/v1/mcp",
+      "args": []
+    }
+  }
+}
