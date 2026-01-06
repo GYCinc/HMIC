@@ -1,0 +1,7 @@
+{
+  "gemini.cli.command.checkpointing": true,
+  "gemini.cli.command.useFlash": true,
+  "gemini.cli.contextMenu.onCMD": true,
+  "gemini.cli.contextMenu.onBash": true,
+  "gemini.cli.contextMenu.onGitBash": true
+}
