@@ -24,21 +24,21 @@ const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 // --- LOGGER SETUP ---
 const logger = (0, pino_1.default)({
-    level: process.env.LOG_LEVEL || 'info',
+    level: process.env.LOG_LEVEL || "info",
     transport: {
-        target: 'pino-pretty',
+        target: "pino-pretty",
         options: {
             colorize: true,
-            translateTime: 'SYS:standard',
-            ignore: 'pid,hostname',
-        }
-    }
+            translateTime: "SYS:standard",
+            ignore: "pid,hostname",
+        },
+    },
 });
 // --- CONFIGURATION ---
-const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path_1.default.resolve('data');
-const CONFIG_PATH = process.env.CONFIG_PATH || path_1.default.resolve('config');
-const DB_PATH = path_1.default.join(DATA_DIR, 'hmic.db');
-const TOOL_CONFIG_PATH = path_1.default.join(CONFIG_PATH, 'tools.yaml');
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path_1.default.resolve("data");
+const CONFIG_PATH = process.env.CONFIG_PATH || path_1.default.resolve("config");
+const DB_PATH = path_1.default.join(DATA_DIR, "hmic.db");
+const TOOL_CONFIG_PATH = path_1.default.join(CONFIG_PATH, "tools.yaml");
 // Ensure directories exist
 if (!fs_1.default.existsSync(DATA_DIR))
     fs_1.default.mkdirSync(DATA_DIR, { recursive: true });
@@ -47,7 +47,8 @@ if (!fs_1.default.existsSync(CONFIG_PATH))
 // Config Schema
 const toolConfigSchema = joi_1.default.object({
     version: joi_1.default.string().required(),
-    tools: joi_1.default.array().items(joi_1.default.object({
+    tools: joi_1.default.array()
+        .items(joi_1.default.object({
         id: joi_1.default.string().required(),
         name: joi_1.default.string().required(),
         description: joi_1.default.string().optional(),
@@ -58,18 +59,21 @@ const toolConfigSchema = joi_1.default.object({
             max_memory_mb: joi_1.default.number().min(1).optional(),
             max_cpu_percent: joi_1.default.number().min(1).max(100).optional(),
             auto_restart: joi_1.default.boolean().default(true),
-            max_restarts: joi_1.default.number().min(0).default(3)
-        }).optional()
-    })).min(1)
+            max_restarts: joi_1.default.number().min(0).default(3),
+        }).optional(),
+    }))
+        .min(1),
 });
 // --- INITIALIZATION ---
 const app = (0, express_1.default)();
 const httpServer = (0, http_1.createServer)(app);
 const io = new socket_io_1.Server(httpServer, {
     cors: {
-        origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
-        credentials: true
-    }
+        origin: process.env.ALLOWED_ORIGINS?.split(",") || [
+            "http://localhost:3000",
+        ],
+        credentials: true,
+    },
 });
 const port = process.env.PORT || 3000;
 // Security middleware
@@ -77,24 +81,30 @@ app.use((0, helmet_1.default)({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+            scriptSrc: [
+                "'self'",
+                "'unsafe-inline'",
+                "https://cdnjs.cloudflare.com",
+            ],
             styleSrc: ["'self'", "'unsafe-inline'"],
-            connectSrc: ["'self'", "ws:", "wss:"]
-        }
-    }
+            connectSrc: ["'self'", "ws:", "wss:"],
+        },
+    },
 }));
 app.use((0, cors_1.default)({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
-    credentials: true
+    origin: process.env.ALLOWED_ORIGINS?.split(",") || [
+        "http://localhost:3000",
+    ],
+    credentials: true,
 }));
 app.use(express_1.default.json());
 // Rate limiting
 const apiLimiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
     max: 100,
-    message: 'Too many requests from this IP'
+    message: "Too many requests from this IP",
 });
-app.use('/api/', apiLimiter);
+app.use("/api/", apiLimiter);
 // Basic Authentication Middleware
 const requireAuth = (req, res, next) => {
     if (!process.env.HTTP_USER || !process.env.HTTP_PASSWORD)
@@ -103,13 +113,13 @@ const requireAuth = (req, res, next) => {
     if (!credentials ||
         credentials.name !== process.env.HTTP_USER ||
         credentials.pass !== process.env.HTTP_PASSWORD) {
-        res.set('WWW-Authenticate', 'Basic realm="HMIC Hub"');
-        return res.status(401).send('Authentication required');
+        res.set("WWW-Authenticate", 'Basic realm="HMIC Hub"');
+        return res.status(401).send("Authentication required");
     }
     next();
 };
 app.use((req, res, next) => {
-    if (req.path === '/health')
+    if (req.path === "/health")
         return next();
     requireAuth(req, res, next);
 });
@@ -119,7 +129,7 @@ let db;
     try {
         db = await (0, sqlite_1.open)({
             filename: DB_PATH,
-            driver: sqlite3_1.default.Database
+            driver: sqlite3_1.default.Database,
         });
         await db.exec(`
       CREATE TABLE IF NOT EXISTS history (
@@ -162,12 +172,12 @@ class ToolManager {
         this.loadConfig();
         this.configWatcher = chokidar_1.default.watch(TOOL_CONFIG_PATH, {
             persistent: true,
-            ignoreInitial: true
+            ignoreInitial: true,
         });
-        this.configWatcher.on('change', () => {
-            logger.info('Config file changed, reloading...');
+        this.configWatcher.on("change", () => {
+            logger.info("Config file changed, reloading...");
             this.loadConfig();
-            io.emit('config_updated');
+            io.emit("config_updated");
         });
     }
     async loadConfig() {
@@ -176,7 +186,7 @@ class ToolManager {
                 await this.loadDefaultConfig();
                 return;
             }
-            const configContent = await fs_1.default.promises.readFile(TOOL_CONFIG_PATH, 'utf8');
+            const configContent = await fs_1.default.promises.readFile(TOOL_CONFIG_PATH, "utf8");
             const config = js_yaml_1.default.load(configContent);
             const { error, value } = toolConfigSchema.validate(config);
             if (error)
@@ -191,31 +201,31 @@ class ToolManager {
     }
     async loadDefaultConfig() {
         const defaultConfig = {
-            version: '1.0',
+            version: "1.0",
             tools: [
                 {
-                    id: 'filesystem',
-                    name: 'Filesystem',
-                    command: 'npx',
-                    args: ['-y', '@modelcontextprotocol/server-filesystem', DATA_DIR],
-                    resource_limits: { auto_restart: true, max_restarts: 3 }
+                    id: "filesystem",
+                    name: "Filesystem",
+                    command: "npx",
+                    args: ["-y", "@modelcontextprotocol/server-filesystem", DATA_DIR],
+                    resource_limits: { auto_restart: true, max_restarts: 3 },
                 },
                 {
-                    id: 'brave-search',
-                    name: 'Brave Search',
-                    command: 'npx',
-                    args: ['-y', '@modelcontextprotocol/server-brave-search'],
-                    env: { BRAVE_API_KEY: process.env.BRAVE_API_KEY || '' },
-                    resource_limits: { auto_restart: true, max_restarts: 3 }
-                }
-            ]
+                    id: "brave-search",
+                    name: "Brave Search",
+                    command: "npx",
+                    args: ["-y", "@modelcontextprotocol/server-brave-search"],
+                    env: { BRAVE_API_KEY: process.env.BRAVE_API_KEY || "" },
+                    resource_limits: { auto_restart: true, max_restarts: 3 },
+                },
+            ],
         };
         await this.updateTools(defaultConfig.tools);
     }
     async updateTools(newTools) {
         // Stop tools that are no longer in config
         for (const [toolId, tool] of this.tools) {
-            if (!newTools.find(t => t.id === toolId))
+            if (!newTools.find((t) => t.id === toolId))
                 await this.stopTool(toolId);
         }
         // Start or update tools
@@ -233,68 +243,76 @@ class ToolManager {
     async startTool(config) {
         const activeTool = {
             config,
-            status: 'starting',
+            status: "starting",
             restartCount: 0,
-            lastHeartbeat: new Date()
+            lastHeartbeat: new Date(),
         };
         this.tools.set(config.id, activeTool);
         try {
             logger.info(`Launching tool: ${config.name}`);
-            const expandedArgs = (config.args || []).map(arg => {
-                return arg.replace(/\${(\w+)}/g, (_, name) => process.env[name] || _);
-            });
+            const expandVar = (str) => {
+                return str.replace(/\${(\w+)}/g, (_, name) => {
+                    if (name === "DATA_DIR")
+                        return DATA_DIR;
+                    return process.env[name] || "";
+                });
+            };
+            const expandedArgs = (config.args || []).map(expandVar);
+            const expandedEnv = config.env
+                ? Object.fromEntries(Object.entries(config.env).map(([k, v]) => [k, expandVar(v)]))
+                : {};
             const child = (0, child_process_1.spawn)(config.command, expandedArgs, {
-                env: { ...process.env, ...config.env },
-                stdio: ['ignore', 'pipe', 'pipe']
+                env: { ...process.env, ...expandedEnv },
+                stdio: ["pipe", "pipe", "pipe"],
             });
             if (!child.pid) {
                 throw new Error("Failed to spawn process");
             }
             activeTool.process = child;
             activeTool.pid = child.pid;
-            activeTool.status = 'running';
-            child.stdout?.on('data', (data) => {
+            activeTool.status = "running";
+            child.stdout?.on("data", (data) => {
                 const msg = data.toString().trim();
                 if (msg) {
-                    io.emit('log', `[${config.name}] ${msg}`);
+                    io.emit("log", `[${config.name}] ${msg}`);
                 }
             });
-            child.stderr?.on('data', (data) => {
+            child.stderr?.on("data", (data) => {
                 const msg = data.toString().trim();
                 if (msg) {
-                    io.emit('log', `[${config.name} ERR] ${msg}`);
+                    io.emit("log", `[${config.name} ERR] ${msg}`);
                 }
             });
-            child.on('close', async (code) => {
+            child.on("close", async (code) => {
                 logger.warn(`Tool ${config.name} exited with code ${code}`);
-                activeTool.status = 'stopped';
+                activeTool.status = "stopped";
                 activeTool.process = undefined;
-                io.emit('tool_status', { toolId: config.id, status: 'stopped' });
+                io.emit("tool_status", { toolId: config.id, status: "stopped" });
                 if (config.resource_limits?.auto_restart &&
                     activeTool.restartCount < (config.resource_limits.max_restarts || 3)) {
                     activeTool.restartCount++;
                     setTimeout(() => this.startTool(config), 2000);
                 }
             });
-            child.on('error', (error) => {
+            child.on("error", (error) => {
                 logger.error(`Tool ${config.name} process error: ${error.message}`);
-                activeTool.status = 'error';
-                io.emit('tool_status', { toolId: config.id, status: 'error' });
-                io.emit('log', `[ERR] Tool ${config.name} failed: ${error.message}`);
+                activeTool.status = "error";
+                io.emit("tool_status", { toolId: config.id, status: "error" });
+                io.emit("log", `[ERR] Tool ${config.name} failed: ${error.message}`);
             });
-            io.emit('tool_status', {
+            io.emit("tool_status", {
                 toolId: config.id,
                 status: activeTool.status,
-                pid: activeTool.pid
+                pid: activeTool.pid,
             });
             if (db) {
                 await db.run(`INSERT OR REPLACE INTO tool_status (tool_id, status, pid, restart_count) VALUES (?, ?, ?, ?)`, config.id, activeTool.status, activeTool.pid, activeTool.restartCount);
             }
         }
         catch (error) {
-            activeTool.status = 'error';
+            activeTool.status = "error";
             logger.error(`Failed to start tool ${config.name}: ${error.message}`);
-            io.emit('log', `[ERR] Failed to start ${config.name}: ${error.message}`);
+            io.emit("log", `[ERR] Failed to start ${config.name}: ${error.message}`);
         }
         return activeTool;
     }
@@ -317,7 +335,7 @@ const toolManager = new ToolManager();
 const metrics = {
     totalRequests: 0,
     successfulRequests: 0,
-    failedRequests: 0
+    failedRequests: 0,
 };
 setInterval(async () => {
     try {
@@ -329,11 +347,12 @@ setInterval(async () => {
             cpu: stats.cpu,
             memory: stats.memory,
             timestamp: Date.now(),
-            active_tools: toolManager.getTools().filter(t => t.status === 'running').length,
+            active_tools: toolManager.getTools().filter((t) => t.status === "running")
+                .length,
             total_requests: metrics.totalRequests,
-            error_rate: errorRate
+            error_rate: errorRate,
         };
-        io.emit('metrics', systemMetrics);
+        io.emit("metrics", systemMetrics);
         if (db) {
             await db.run(`INSERT INTO metrics (cpu, memory, active_tools, total_requests, error_rate) VALUES (?, ?, ?, ?, ?)`, stats.cpu, stats.memory, systemMetrics.active_tools, systemMetrics.total_requests, systemMetrics.error_rate);
         }
@@ -343,21 +362,21 @@ setInterval(async () => {
     }
 }, 5000);
 // --- SOCKET.IO ---
-io.on('connection', (socket) => {
+io.on("connection", (socket) => {
     logger.info(`Dashboard connected: ${socket.id}`);
-    socket.emit('init', {
-        tools: toolManager.getTools().map(t => ({
+    socket.emit("init", {
+        tools: toolManager.getTools().map((t) => ({
             id: t.config.id,
             name: t.config.name,
             status: t.status,
             description: t.config.description,
-            pid: t.pid
+            pid: t.pid,
         })),
-        metrics: metrics
+        metrics: metrics,
     });
-    socket.on('tool:call', async (data) => {
+    socket.on("tool:call", async (data) => {
         const { toolId, method, params } = data;
-        io.emit('log', `[MANUAL CMD] Sending to ${toolId}: ${JSON.stringify(params)}`);
+        io.emit("log", `[MANUAL CMD] Sending to ${toolId}: ${JSON.stringify(params)}`);
         // Update metrics
         metrics.totalRequests++;
         // Here you would implement actual MCP protocol communication
@@ -368,42 +387,42 @@ io.on('connection', (socket) => {
                 toolId,
                 method,
                 result: `Simulated response for ${method}`,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             };
-            socket.emit('tool:result', result);
-            io.emit('log', `[RESULT] ${toolId}.${method} completed`);
+            socket.emit("tool:result", result);
+            io.emit("log", `[RESULT] ${toolId}.${method} completed`);
         }, 100);
     });
-    socket.on('disconnect', () => {
+    socket.on("disconnect", () => {
         logger.info(`Dashboard disconnected: ${socket.id}`);
     });
 });
 // --- API ROUTES ---
-app.get('/health', (req, res) => {
+app.get("/health", (req, res) => {
     res.json({
-        status: 'healthy',
+        status: "healthy",
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
-        tools: toolManager.getTools().length
+        tools: toolManager.getTools().length,
     });
 });
-app.get('/api/tools', (req, res) => {
-    const tools = toolManager.getTools().map(t => ({
+app.get("/api/tools", (req, res) => {
+    const tools = toolManager.getTools().map((t) => ({
         id: t.config.id,
         name: t.config.name,
         status: t.status,
         pid: t.pid,
-        restartCount: t.restartCount
+        restartCount: t.restartCount,
     }));
     res.json(tools);
 });
-app.post('/api/tools/:toolId/stop', async (req, res) => {
+app.post("/api/tools/:toolId/stop", async (req, res) => {
     const { toolId } = req.params;
     await toolManager.stopTool(toolId);
     res.json({ success: true, message: `Tool ${toolId} stopped` });
 });
 // --- DASHBOARD UI ---
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
     res.send(`
     <!DOCTYPE html>
     <html>
@@ -574,8 +593,8 @@ httpServer.listen(port, () => {
     logger.info(`Config path: ${CONFIG_PATH}`);
 });
 // Graceful shutdown
-process.on('SIGTERM', async () => {
-    logger.info('Received SIGTERM, shutting down gracefully...');
+process.on("SIGTERM", async () => {
+    logger.info("Received SIGTERM, shutting down gracefully...");
     // Stop all tools
     const tools = toolManager.getTools();
     for (const tool of tools) {
@@ -587,7 +606,7 @@ process.on('SIGTERM', async () => {
         await db.close();
     }
     httpServer.close(() => {
-        logger.info('Server closed');
+        logger.info("Server closed");
         process.exit(0);
     });
 });

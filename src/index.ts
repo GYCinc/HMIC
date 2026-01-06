@@ -616,6 +616,19 @@ app.get("/", (req, res) => {
             button:hover {
               background: var(--text);
             }
+            .core-frame {
+              width: 100%;
+              height: 300px;
+              border: 1px solid var(--dim);
+              background: #000;
+            }
+            .sync-btn {
+              background: var(--text);
+              color: #000;
+              width: 100%;
+              padding: 10px;
+              margin-top: 10px;
+            }
         </style>
       </head>
       <body>
@@ -629,6 +642,10 @@ app.get("/", (req, res) => {
             <div>MEM: <span id="mem">--</span>MB</div>
             <div>Requests: <span id="requests">0</span></div>
             <div>Active Tools: <span id="activeTools">0</span></div>
+            
+            <div class="panel-title" style="margin-top:20px">CORE MEMORY</div>
+            <iframe class="core-frame" src="https://getcore.me"></iframe>
+            <button class="sync-btn" onclick="syncMemory()">SYNC VISUALIZATION</button>
           </div>
           <div class="panel">
             <div class="panel-title">LIVE FEED</div>
@@ -690,6 +707,33 @@ app.get("/", (req, res) => {
               .then(data => {
                 console.log('Tool stopped:', data);
               });
+          }
+
+          function syncMemory() {
+            const btn = document.querySelector('.sync-btn');
+            const originalText = btn.innerText;
+            btn.innerText = 'SYNCING...';
+            btn.disabled = true;
+
+            socket.emit('tool:call', {
+              toolId: 'core-memory-bridge',
+              method: 'callTool',
+              params: {
+                name: 'memory_ingest',
+                arguments: {
+                  sessionId: 'dashboard-sync',
+                  message: 'Manual Sync triggered from HMIC Dashboard.'
+                }
+              }
+            });
+
+            setTimeout(() => {
+              btn.innerText = 'SYNC COMPLETE';
+              setTimeout(() => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+              }, 2000);
+            }, 3000);
           }
         </script>
       </body>
