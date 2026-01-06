@@ -185,7 +185,7 @@ async function main() {
 
     // 2. Start Custom SSE Transport
     const transport = new CustomSSEClientTransport(
-      new URL(`${CORE_ENDPOINT}?source=Antigravity`),
+      new URL(`${CORE_ENDPOINT}?source=Antigravity&integrations=all`),
       INIT_RESULT
     );
 
