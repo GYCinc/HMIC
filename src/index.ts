@@ -318,7 +318,7 @@ class ToolManager {
 
       const child = spawn(config.command, expandedArgs, {
         env: { ...process.env, ...expandedEnv },
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
 
       if (!child.pid) {
