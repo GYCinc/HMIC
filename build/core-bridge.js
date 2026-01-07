@@ -13,21 +13,57 @@ if (!API_KEY) {
     process.exit(1);
 }
 let SESSION_ID = null;
-let INIT_RESULT = null;
+let isConnected = false;
 // Mock EventSource with Auth and Session
 // @ts-ignore
 global.EventSource = class AuthenticatedEventSource extends eventsource_1.EventSource {
     constructor(url, eventSourceInitDict) {
         const headers = {
             Authorization: `Bearer ${API_KEY}`,
+            Accept: "text/event-stream",
             ...(SESSION_ID ? { "mcp-session-id": SESSION_ID } : {}),
             ...(eventSourceInitDict?.headers || {}),
         };
         super(url, { ...eventSourceInitDict, headers });
     }
 };
-const client = new index_js_1.Client({ name: "hmic-hub-bridge", version: "1.3.0" }, { capabilities: { tools: {} } });
-const server = new index_js_2.Server({ name: "core-memory-bridge", version: "1.3.0" }, { capabilities: { tools: {} } });
+const client = new index_js_1.Client({ name: "hmic-hub-bridge", version: "1.4.0" }, { capabilities: { tools: {} } });
+const server = new index_js_2.Server({ name: "core-memory-bridge", version: "1.4.0" }, { capabilities: { tools: {} } });
+// Register handlers IMMEDIATELY so bridge responds to IDE even if background sync is slow
+server.setRequestHandler(types_js_1.ListToolsRequestSchema, async () => {
+    console.error("[Bridge] Handling listTools request...");
+    if (!isConnected) {
+        console.error("[Bridge Warning] listTools called before remote connected.");
+        return { tools: [], _meta: { status: "connecting" } };
+    }
+    try {
+        const result = await client.listTools();
+        console.error(`[Bridge] listTools returned ${result.tools.length} tools`);
+        return result;
+    }
+    catch (err) {
+        console.error("[Bridge Error] listTools failed:", err);
+        throw err;
+    }
+});
+server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
+    console.error(`[Bridge] Handling callTool request: ${request.params.name}`);
+    if (!isConnected) {
+        throw new Error("Bridge not connected to remote Core Memory yet.");
+    }
+    try {
+        const result = await client.callTool({
+            name: request.params.name,
+            arguments: request.params.arguments,
+        });
+        console.error(`[Bridge] callTool ${request.params.name} succeeded`);
+        return result;
+    }
+    catch (err) {
+        console.error(`[Bridge Error] callTool ${request.params.name} failed:`, err);
+        throw err;
+    }
+});
 async function main() {
     try {
         // 1. Initial Handshake to get Session ID
@@ -61,7 +97,7 @@ async function main() {
         console.error("[Bridge] Local Server started on Stdio (GREEN).");
         // 3. Connect to Remote in background
         const transport = new sse_js_1.SSEClientTransport(new URL(`${CORE_ENDPOINT}?source=Antigravity&integrations=all&session_id=${SESSION_ID}`));
-        // Patch fetch for the internal transport usage
+        // Patch fetch for internal SDK usage
         const originalFetch = global.fetch;
         global.fetch = async (input, init) => {
             const urlStr = input.toString();
@@ -75,25 +111,18 @@ async function main() {
             }
             return originalFetch(input, init);
         };
-        client
-            .connect(transport)
-            .then(async () => {
-            console.error("[Bridge] Connected to remote SSE.");
-            // Populate handlers once remote is ready
-            server.setRequestHandler(types_js_1.ListToolsRequestSchema, async () => {
-                return await client.listTools();
-            });
-            server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
-                return await client.callTool({
-                    name: request.params.name,
-                    arguments: request.params.arguments,
-                });
-            });
-            console.error("[Bridge] Tool handlers registered.");
-        })
-            .catch((err) => {
-            console.error("[Bridge Background Error]", err);
-        });
+        console.error(`[Bridge] Connecting to remote SSE...`);
+        await client.connect(transport);
+        isConnected = true;
+        console.error("[Bridge] Connected to remote SSE successfully.");
+        // Pre-warm tools
+        try {
+            const remoteTools = await client.listTools();
+            console.error(`[Bridge] Remote tools pre-warmed: ${remoteTools.tools.length}`);
+        }
+        catch (err) {
+            console.error("[Bridge Warning] Failed to pre-warm tools:", err);
+        }
     }
     catch (error) {
         console.error("[Bridge Fatal Error]", error);
