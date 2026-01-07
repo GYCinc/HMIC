@@ -1,0 +1,24 @@
+{
+  "name": "HMIC Gateway",
+  "key": "hmic-hub",
+  "description": "Central gateway for Filesystem, Sanity, and Advanced Reference tools.",
+  "icon": "server",
+  "auth": {
+    "type": "none"
+  },
+  "mcp": {
+    "type": "stdio",
+    "url": "node",
+    "args": [
+      "build/index.js"
+    ],
+    "env": {
+      "RAILWAY_VOLUME_MOUNT_PATH": "/app/data",
+      "SANITY_PROJECT_ID": "rzug0rgk",
+      "SANITY_DATASET": "production",
+      "ENABLE_REF_TOOLS": "true",
+      "BRAVE_API_KEY": "${config:BRAVE_API_KEY}",
+      "GITHUB_TOKEN": "${config:GITHUB_TOKEN}"
+    }
+  }
+}

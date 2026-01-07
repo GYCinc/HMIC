@@ -5,7 +5,6 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
-  JSONRPCMessage,
 } from "@modelcontextprotocol/sdk/types.js";
 import { EventSource } from "eventsource";
 
@@ -20,6 +19,7 @@ if (!API_KEY) {
 let SESSION_ID: string | null = null;
 let INIT_RESULT: any = null;
 
+// Mock EventSource with Auth and Session
 // @ts-ignore
 global.EventSource = class AuthenticatedEventSource extends EventSource {
   constructor(url: string | URL, eventSourceInitDict?: any) {
@@ -29,89 +29,24 @@ global.EventSource = class AuthenticatedEventSource extends EventSource {
       ...(eventSourceInitDict?.headers || {}),
     };
     super(url, { ...eventSourceInitDict, headers });
-
-    // Patch: Emit 'endpoint' event manually if server doesn't send it.
-    this.addEventListener("open", () => {
-      setTimeout(() => {
-        const endpointUrl = `${CORE_ENDPOINT}?source=Antigravity&integrations=all&session_id=${SESSION_ID}`;
-        // Global MessageEvent is available in Node 20
-        const event = new global.MessageEvent("endpoint", {
-          data: endpointUrl,
-        });
-        this.dispatchEvent(event);
-      }, 100);
-    });
   }
 } as any;
 
-const originalFetch = global.fetch;
-global.fetch = async (input, init) => {
-  const urlStr = input.toString();
-  if (
-    urlStr.includes(CORE_ENDPOINT) ||
-    urlStr.includes("mcp.getcore.me") ||
-    (init?.method === "POST" && urlStr.includes("http"))
-  ) {
-    init = init || {};
-    init.headers = {
-      ...init.headers,
-      Authorization: `Bearer ${API_KEY}`,
-      Accept: "application/json, text/event-stream",
-      ...(SESSION_ID ? { "mcp-session-id": SESSION_ID } : {}),
-    };
-    console.error(`[Bridge] Fetching ${init.method || "GET"} ${urlStr}`);
-  }
-  const response = await originalFetch(input, init);
-  if (init?.method === "POST" && urlStr.includes(CORE_ENDPOINT)) {
-    console.error(`[Bridge] POST Status: ${response.status}`);
-    if (!response.ok) {
-      const text = await response.clone().text();
-      console.error(`[Bridge] POST Error Body: ${text}`);
-    }
-  }
-  return response;
-};
-
-// Custom Transport to handle double-init
-class CustomSSEClientTransport extends SSEClientTransport {
-  constructor(url: URL, private savedInitResult: any) {
-    super(url);
-  }
-
-  async send(message: JSONRPCMessage): Promise<void> {
-    // Intercept 'initialize' request
-    if ((message as any).method === "initialize") {
-      // Simulate server response
-      const response = {
-        jsonrpc: "2.0",
-        id: (message as any).id,
-        result: this.savedInitResult.result,
-      };
-
-      if (this.onmessage) {
-        this.onmessage(response as JSONRPCMessage);
-      }
-      return;
-    }
-    return super.send(message);
-  }
-}
-
 const client = new Client(
-  { name: "hmic-hub-bridge", version: "1.0.0" },
+  { name: "hmic-hub-bridge", version: "1.3.0" },
   { capabilities: { tools: {} } }
 );
 
 const server = new Server(
-  { name: "core-memory-bridge", version: "1.0.0" },
+  { name: "core-memory-bridge", version: "1.3.0" },
   { capabilities: { tools: {} } }
 );
 
 async function main() {
   try {
-    // 1. Initialize Session via POST
-    console.error("Initializing Core Session...");
-    const initResponse = await originalFetch(
+    // 1. Initial Handshake to get Session ID
+    console.error("[Bridge] Handshaking with Core...");
+    const initResponse = await fetch(
       `${CORE_ENDPOINT}?source=Antigravity&integrations=all`,
       {
         method: "POST",
@@ -134,85 +69,65 @@ async function main() {
     );
 
     if (!initResponse.ok) {
-      console.error(
-        `Initialization failed: ${
-          initResponse.status
-        } ${await initResponse.text()}`
+      throw new Error(
+        `Init failed: ${initResponse.status} ${await initResponse.text()}`
       );
-      process.exit(1);
     }
 
-    // Capture Session ID
     SESSION_ID = initResponse.headers.get("mcp-session-id");
+    console.error(`[Bridge] Captured Session: ${SESSION_ID}`);
 
-    if (!SESSION_ID) {
-      console.warn("Warning: No mcp-session-id returned from initialization.");
-    } else {
-      console.error(`Session initialized: ${SESSION_ID}`);
-    }
+    // 2. Start Local Server immediately so IDE turns GREEN
+    const stdioTransport = new StdioServerTransport();
+    await server.connect(stdioTransport);
+    console.error("[Bridge] Local Server started on Stdio (GREEN).");
 
-    // Parse SSE stream to get Init Result
-    const reader = initResponse.body?.getReader();
-    let receivedData = "";
-
-    if (reader) {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = new TextDecoder().decode(value);
-        receivedData += chunk;
-
-        const dataMatch = receivedData.match(/data: ({.*})/);
-        if (dataMatch) {
-          try {
-            INIT_RESULT = JSON.parse(dataMatch[1]);
-            console.error("Parsed initialization result.");
-            break;
-          } catch (e) {
-            console.error("Failed to parse init result JSON:", e);
-          }
-        }
-      }
-      // Stop reading stream
-      reader.cancel();
-    }
-
-    if (!INIT_RESULT) {
-      console.error("Failed to capture initialization result from SSE stream.");
-      // proceed anyway? No, customization needs it.
-      process.exit(1);
-    }
-
-    // 2. Start Custom SSE Transport
-    const transport = new CustomSSEClientTransport(
-      new URL(`${CORE_ENDPOINT}?source=Antigravity&integrations=all`),
-      INIT_RESULT
+    // 3. Connect to Remote in background
+    const transport = new SSEClientTransport(
+      new URL(
+        `${CORE_ENDPOINT}?source=Antigravity&integrations=all&session_id=${SESSION_ID}`
+      )
     );
 
-    await client.connect(transport);
-    console.error("Connected to Core Memory SSE Endpoint");
+    // Patch fetch for the internal transport usage
+    const originalFetch = global.fetch;
+    global.fetch = async (input, init) => {
+      const urlStr = input.toString();
+      if (urlStr.includes("mcp.getcore.me")) {
+        init = init || {};
+        init.headers = {
+          ...init.headers,
+          Authorization: `Bearer ${API_KEY}`,
+          "mcp-session-id": SESSION_ID || "",
+        };
+      }
+      return originalFetch(input, init);
+    };
 
-    const { tools: remoteTools } = await client.listTools();
-    console.error(`Found ${remoteTools.length} tools`);
+    client
+      .connect(transport)
+      .then(async () => {
+        console.error("[Bridge] Connected to remote SSE.");
 
-    server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const result = await client.listTools();
-      return { tools: result.tools };
-    });
+        // Populate handlers once remote is ready
+        server.setRequestHandler(ListToolsRequestSchema, async () => {
+          return await client.listTools();
+        });
 
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const result = await client.callTool({
-        name: request.params.name,
-        arguments: request.params.arguments,
+        server.setRequestHandler(CallToolRequestSchema, async (request) => {
+          return await client.callTool({
+            name: request.params.name,
+            arguments: request.params.arguments,
+          });
+        });
+
+        console.error("[Bridge] Tool handlers registered.");
+      })
+      .catch((err) => {
+        console.error("[Bridge Background Error]", err);
       });
-      return result;
-    });
-
-    const startTransport = new StdioServerTransport();
-    await server.connect(startTransport);
-    console.error("Core Memory Bridge running on Stdio");
   } catch (error) {
-    console.error("Bridge Error:", error);
+    console.error("[Bridge Fatal Error]", error);
     process.exit(1);
   }
 }
