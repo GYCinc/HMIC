@@ -208,6 +208,43 @@ interface ActiveTool {
   pid?: number;
 }
 
+class LogBuffer {
+  private buffer: string[] = [];
+  private flushTimeout: NodeJS.Timeout | null = null;
+  private readonly FLUSH_DELAY = 100; // ms
+  private readonly MAX_BUFFER_SIZE = 1000;
+
+  constructor(private toolName: string, private io: Server) {}
+
+  log(msg: string) {
+    if (!msg) return;
+    this.buffer.push(`[${this.toolName}] ${msg}`);
+    this.checkFlush();
+  }
+
+  private checkFlush() {
+    if (this.buffer.length >= this.MAX_BUFFER_SIZE) {
+      this.flush();
+    } else if (!this.flushTimeout) {
+      this.flushTimeout = setTimeout(() => this.flush(), this.FLUSH_DELAY);
+    }
+  }
+
+  flush() {
+    if (this.flushTimeout) {
+      clearTimeout(this.flushTimeout);
+      this.flushTimeout = null;
+    }
+
+    if (this.buffer.length === 0) return;
+
+    // Join messages with newlines to preserve structure while reducing emits
+    const combinedMsg = this.buffer.join('\n');
+    this.io.emit("log", combinedMsg);
+    this.buffer = [];
+  }
+}
+
 class ToolManager {
   private tools = new Map<string, ActiveTool>();
   private configWatcher: chokidar.FSWatcher;
@@ -329,10 +366,12 @@ class ToolManager {
       activeTool.pid = child.pid;
       activeTool.status = "running";
 
+      const logBuffer = new LogBuffer(config.name, io);
+
       child.stdout?.on("data", (data: Buffer) => {
         const msg = data.toString().trim();
         if (msg) {
-          io.emit("log", `[${config.name}] ${msg}`);
+          logBuffer.log(msg);
         }
       });
 
@@ -344,6 +383,7 @@ class ToolManager {
       });
 
       child.on("close", async (code: number) => {
+        logBuffer.flush();
         logger.warn(`Tool ${config.name} exited with code ${code}`);
         activeTool.status = "stopped";
         activeTool.process = undefined;
@@ -359,6 +399,7 @@ class ToolManager {
       });
 
       child.on("error", (error: Error) => {
+        logBuffer.flush();
         logger.error(`Tool ${config.name} process error: ${error.message}`);
         activeTool.status = "error";
         io.emit("tool_status", { toolId: config.id, status: "error" });
