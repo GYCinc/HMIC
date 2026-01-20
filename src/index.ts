@@ -160,6 +160,11 @@ let db: any;
         status TEXT,
         latency_ms INTEGER
       );
+      CREATE INDEX IF NOT EXISTS idx_history_tool_id ON history(tool_id);
+      CREATE INDEX IF NOT EXISTS idx_history_status ON history(status);
+      CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_history_tool_id_status ON history(tool_id, status);
+
       CREATE TABLE IF NOT EXISTS metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
