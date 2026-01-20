@@ -29,6 +29,7 @@ const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.resolve("data");
 const CONFIG_PATH = process.env.CONFIG_PATH || path.resolve("config");
 const DB_PATH = path.join(DATA_DIR, "hmic.db");
 const TOOL_CONFIG_PATH = path.join(CONFIG_PATH, "tools.yaml");
+const VAR_EXPANSION_REGEX = /\${(\w+)}/g;
 
 // Ensure directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -306,7 +307,7 @@ class ToolManager {
       logger.info(`Launching tool: ${config.name}`);
 
       const expandVar = (str: string) => {
-        return str.replace(/\${(\w+)}/g, (_, name) => {
+        return str.replace(VAR_EXPANSION_REGEX, (_, name) => {
           if (name === "DATA_DIR") return DATA_DIR;
           return process.env[name] || "";
         });
