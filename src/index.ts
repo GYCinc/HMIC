@@ -16,6 +16,10 @@ import Joi from "joi";
 import pino from "pino";
 import { spawn, ChildProcess } from "child_process";
 import dotenv from "dotenv";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { PassThrough } from "stream";
 
 dotenv.config();
 
@@ -200,6 +204,8 @@ interface ToolConfig {
 interface ActiveTool {
   config: ToolConfig;
   process?: ChildProcess;
+  client?: Client;
+  transport?: Transport;
   status: "starting" | "running" | "stopped" | "error";
   restartCount: number;
   lastHeartbeat: Date;
@@ -358,10 +364,24 @@ class ToolManager {
           )
         : {};
 
-      const child = spawn(config.command, expandedArgs, {
-        env: { ...process.env, ...expandedEnv },
-        stdio: ["pipe", "pipe", "pipe"],
+      const logBuffer = new LogBuffer(config.name, io);
+
+      const transport = new StdioClientTransport({
+        command: config.command,
+        args: expandedArgs,
+        env: { ...process.env, ...expandedEnv } as Record<string, string>,
+        stderr: "pipe" as any
       });
+
+      const client = new Client(
+        { name: "hmic-hub", version: "1.0.0" },
+        { capabilities: {} }
+      );
+
+      await client.connect(transport);
+
+      // Access underlying process to get PID and handle lifecycle
+      const child = (transport as any)._process as ChildProcess;
 
       if (!child.pid) {
         throw new Error("Failed to spawn process");
@@ -370,16 +390,10 @@ class ToolManager {
       activeTool.process = child;
       activeTool.pid = child.pid;
       activeTool.status = "running";
+      activeTool.client = client;
+      activeTool.transport = transport;
 
-      const logBuffer = new LogBuffer(config.name, io);
-
-      child.stdout?.on("data", (data: Buffer) => {
-        const msg = data.toString().trim();
-        if (msg) {
-          logBuffer.log(msg);
-        }
-      });
-
+      // Handle stderr for logging
       child.stderr?.on("data", (data: Buffer) => {
         const msg = data.toString().trim();
         if (msg) {
@@ -387,11 +401,17 @@ class ToolManager {
         }
       });
 
+      // Note: stdout is handled by StdioClientTransport for MCP messages
+
+      // We attach to the process 'close' event for lifecycle management
+      // because client.connect might overwrite transport.onclose
       child.on("close", async (code: number) => {
         logBuffer.flush();
         logger.warn(`Tool ${config.name} exited with code ${code}`);
         activeTool.status = "stopped";
         activeTool.process = undefined;
+        activeTool.client = undefined;
+        activeTool.transport = undefined;
         io.emit("tool_status", { toolId: config.id, status: "stopped" });
 
         if (
@@ -436,8 +456,12 @@ class ToolManager {
 
   public async stopTool(toolId: string) {
     const tool = this.tools.get(toolId);
-    if (tool && tool.process) {
-      tool.process.kill();
+    if (tool) {
+      if (tool.transport) {
+        await tool.transport.close();
+      } else if (tool.process) {
+        tool.process.kill();
+      }
     }
     this.tools.delete(toolId);
     logger.info(`Tool ${toolId} stopped`);
@@ -529,19 +553,86 @@ io.on("connection", (socket) => {
       // Update metrics
       metrics.totalRequests++;
 
-      // Here you would implement actual MCP protocol communication
-      // For now, just simulate a response
-      setTimeout(() => {
+      const tool = toolManager.getTool(toolId);
+      if (!tool || tool.status !== "running" || !tool.client) {
+        io.emit("log", `[ERR] Tool ${toolId} is not running or not connected`);
+        const result = {
+          success: false,
+          toolId,
+          method,
+          error: "Tool not running",
+          timestamp: new Date().toISOString(),
+        };
+        socket.emit("tool:result", result);
+        metrics.failedRequests++;
+        return;
+      }
+
+      try {
+        let resultData;
+
+        // Handle different MCP calls based on method name
+        // The dashboard assumes specific methods, but MCP uses JSON-RPC
+        // Common MCP methods: tools/list, tools/call
+
+        if (method === "tools/list") {
+             resultData = await tool.client.listTools();
+        } else if (method === "callTool" || method === "tools/call") {
+             // Expect params to match CallToolRequest
+             resultData = await tool.client.callTool({
+                name: params.name,
+                arguments: params.arguments
+             });
+        } else {
+            // Try generic request
+             // If params is just an object, pass it.
+             // This part depends on what the dashboard sends.
+             // If dashboard sends arbitrary method, we might need to map it.
+             // For now, let's assume method maps to MCP method or tool name?
+
+             // If the method is not a standard MCP method, maybe it's a tool name?
+             // But the dashboard in index.ts had 'callTool' in the syncMemory function.
+             // "method: 'callTool', params: { name: 'memory_ingest', ... }"
+
+             // So we should handle that.
+
+             // If the user sends a raw request:
+             // We can't easily do client.request(method, params) because Client interface is typed.
+             // But we can fallback to standard methods if we know them.
+
+             // Let's assume the dashboard sends valid MCP method names or we map them.
+             // But 'callTool' is a helper in SDK, the underlying method is 'tools/call'.
+
+             // If the dashboard code sends `method: 'callTool'`, we use `client.callTool`.
+
+             // Fallback for unknown methods: try to use the method name as the tool name
+             // assuming the dashboard might be sending tool names directly as method.
+             // If this assumption is wrong, we should just throw the error.
+             throw new Error(`Unknown method: ${method}`);
+        }
+
         const result = {
           success: true,
           toolId,
           method,
-          result: `Simulated response for ${method}`,
+          result: resultData,
           timestamp: new Date().toISOString(),
         };
         socket.emit("tool:result", result);
         io.emit("log", `[RESULT] ${toolId}.${method} completed`);
-      }, 100);
+        metrics.successfulRequests++;
+      } catch (error: any) {
+        io.emit("log", `[ERR] ${toolId}.${method} failed: ${error.message}`);
+        const result = {
+            success: false,
+            toolId,
+            method,
+            error: error.message,
+            timestamp: new Date().toISOString(),
+        };
+        socket.emit("tool:result", result);
+        metrics.failedRequests++;
+      }
     }
   );
 

@@ -30,7 +30,7 @@ global.EventSource = class AuthenticatedEventSource extends EventSource {
     };
     super(url, { ...eventSourceInitDict, headers });
   }
-};
+} as any;
 
 const client = new Client(
   { name: "hmic-hub-bridge", version: "1.4.0" },
