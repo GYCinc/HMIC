@@ -65,6 +65,7 @@ const io = new Server(httpServer, {
   cors: {
     origin: process.env.ALLOWED_ORIGINS?.split(",") || [
       "http://localhost:3000",
+      "http://localhost:2727",
     ],
     credentials: true,
   },
@@ -93,6 +94,7 @@ app.use(
   cors({
     origin: process.env.ALLOWED_ORIGINS?.split(",") || [
       "http://localhost:3000",
+      "http://localhost:2727",
     ],
     credentials: true,
   })

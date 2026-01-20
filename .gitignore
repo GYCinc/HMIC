@@ -4,3 +4,4 @@ build/
 data/
 logs/
 .DS_Store
+visual-layer/*.class
