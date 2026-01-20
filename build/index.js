@@ -25,20 +25,13 @@ dotenv_1.default.config();
 // --- LOGGER SETUP ---
 const logger = (0, pino_1.default)({
     level: process.env.LOG_LEVEL || "info",
-    transport: {
-        target: "pino-pretty",
-        options: {
-            colorize: true,
-            translateTime: "SYS:standard",
-            ignore: "pid,hostname",
-        },
-    },
 });
 // --- CONFIGURATION ---
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path_1.default.resolve("data");
 const CONFIG_PATH = process.env.CONFIG_PATH || path_1.default.resolve("config");
 const DB_PATH = path_1.default.join(DATA_DIR, "hmic.db");
 const TOOL_CONFIG_PATH = path_1.default.join(CONFIG_PATH, "tools.yaml");
+const VAR_EXPANSION_REGEX = /\${(\w+)}/g;
 // Ensure directories exist
 if (!fs_1.default.existsSync(DATA_DIR))
     fs_1.default.mkdirSync(DATA_DIR, { recursive: true });
@@ -143,6 +136,11 @@ let db;
         status TEXT,
         latency_ms INTEGER
       );
+      CREATE INDEX IF NOT EXISTS idx_history_tool_id ON history(tool_id);
+      CREATE INDEX IF NOT EXISTS idx_history_status ON history(status);
+      CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_history_tool_id_status ON history(tool_id, status);
+
       CREATE TABLE IF NOT EXISTS metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -166,6 +164,42 @@ let db;
         logger.error(`Failed to initialize SQLite: ${e}`);
     }
 })();
+class LogBuffer {
+    constructor(toolName, io) {
+        this.toolName = toolName;
+        this.io = io;
+        this.buffer = [];
+        this.flushTimeout = null;
+        this.FLUSH_DELAY = 100; // ms
+        this.MAX_BUFFER_SIZE = 1000;
+    }
+    log(msg) {
+        if (!msg)
+            return;
+        this.buffer.push(`[${this.toolName}] ${msg}`);
+        this.checkFlush();
+    }
+    checkFlush() {
+        if (this.buffer.length >= this.MAX_BUFFER_SIZE) {
+            this.flush();
+        }
+        else if (!this.flushTimeout) {
+            this.flushTimeout = setTimeout(() => this.flush(), this.FLUSH_DELAY);
+        }
+    }
+    flush() {
+        if (this.flushTimeout) {
+            clearTimeout(this.flushTimeout);
+            this.flushTimeout = null;
+        }
+        if (this.buffer.length === 0)
+            return;
+        // Join messages with newlines to preserve structure while reducing emits
+        const combinedMsg = this.buffer.join('\n');
+        this.io.emit("log", combinedMsg);
+        this.buffer = [];
+    }
+}
 class ToolManager {
     constructor() {
         this.tools = new Map();
@@ -182,10 +216,6 @@ class ToolManager {
     }
     async loadConfig() {
         try {
-            if (!fs_1.default.existsSync(TOOL_CONFIG_PATH)) {
-                await this.loadDefaultConfig();
-                return;
-            }
             const configContent = await fs_1.default.promises.readFile(TOOL_CONFIG_PATH, "utf8");
             const config = js_yaml_1.default.load(configContent);
             const { error, value } = toolConfigSchema.validate(config);
@@ -195,6 +225,10 @@ class ToolManager {
             logger.info(`Loaded ${value.tools.length} tool configurations`);
         }
         catch (e) {
+            if (e.code === "ENOENT") {
+                await this.loadDefaultConfig();
+                return;
+            }
             logger.error(`Failed to load config: ${e}`);
             await this.loadDefaultConfig();
         }
@@ -229,16 +263,22 @@ class ToolManager {
                 await this.stopTool(toolId);
         }
         // Start or update tools
-        for (const toolConfig of newTools) {
+        await Promise.all(newTools.map(async (toolConfig) => {
             if (!this.tools.has(toolConfig.id)) {
-                await this.startTool(toolConfig);
+                try {
+                    await this.startTool(toolConfig);
+                }
+                catch (e) {
+                    // Error logged in startTool, but we ensure one failure doesn't stop others
+                    logger.error(`Failed to start tool ${toolConfig.id}: ${e}`);
+                }
             }
             else {
                 const existing = this.tools.get(toolConfig.id);
                 existing.config = toolConfig;
                 this.tools.set(toolConfig.id, existing);
             }
-        }
+        }));
     }
     async startTool(config) {
         const activeTool = {
@@ -251,7 +291,7 @@ class ToolManager {
         try {
             logger.info(`Launching tool: ${config.name}`);
             const expandVar = (str) => {
-                return str.replace(/\${(\w+)}/g, (_, name) => {
+                return str.replace(VAR_EXPANSION_REGEX, (_, name) => {
                     if (name === "DATA_DIR")
                         return DATA_DIR;
                     return process.env[name] || "";
@@ -271,10 +311,11 @@ class ToolManager {
             activeTool.process = child;
             activeTool.pid = child.pid;
             activeTool.status = "running";
+            const logBuffer = new LogBuffer(config.name, io);
             child.stdout?.on("data", (data) => {
                 const msg = data.toString().trim();
                 if (msg) {
-                    io.emit("log", `[${config.name}] ${msg}`);
+                    logBuffer.log(msg);
                 }
             });
             child.stderr?.on("data", (data) => {
@@ -284,6 +325,7 @@ class ToolManager {
                 }
             });
             child.on("close", async (code) => {
+                logBuffer.flush();
                 logger.warn(`Tool ${config.name} exited with code ${code}`);
                 activeTool.status = "stopped";
                 activeTool.process = undefined;
@@ -295,6 +337,7 @@ class ToolManager {
                 }
             });
             child.on("error", (error) => {
+                logBuffer.flush();
                 logger.error(`Tool ${config.name} process error: ${error.message}`);
                 activeTool.status = "error";
                 io.emit("tool_status", { toolId: config.id, status: "error" });
@@ -425,7 +468,7 @@ app.post("/api/tools/:toolId/stop", async (req, res) => {
 app.get("/", (req, res) => {
     res.send(`
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
       <head>
         <title>HMIC // COMMAND CENTER</title>
         <style>
@@ -506,6 +549,23 @@ app.get("/", (req, res) => {
             button:hover {
               background: var(--text);
             }
+            button:focus-visible {
+              outline: 2px solid var(--text);
+              outline-offset: 2px;
+            }
+            .core-frame {
+              width: 100%;
+              height: 300px;
+              border: 1px solid var(--dim);
+              background: #000;
+            }
+            .sync-btn {
+              background: var(--text);
+              color: #000;
+              width: 100%;
+              padding: 10px;
+              margin-top: 10px;
+            }
         </style>
       </head>
       <body>
@@ -519,6 +579,10 @@ app.get("/", (req, res) => {
             <div>MEM: <span id="mem">--</span>MB</div>
             <div>Requests: <span id="requests">0</span></div>
             <div>Active Tools: <span id="activeTools">0</span></div>
+
+            <div class="panel-title" style="margin-top:20px">CORE MEMORY</div>
+            <iframe class="core-frame" src="https://getcore.me" title="Core Memory Visualization"></iframe>
+            <button class="sync-btn" onclick="syncMemory()">SYNC VISUALIZATION</button>
           </div>
           <div class="panel">
             <div class="panel-title">LIVE FEED</div>
@@ -565,7 +629,7 @@ app.get("/", (req, res) => {
               return '<div class="tool-item">' +
                 '<strong class="status-' + t.status + '">' + t.name + '</strong><br>' +
                 '<small>' + t.status.toUpperCase() + ' (PID: ' + (t.pid || 'N/A') + ')</small><br>' +
-                '<button onclick="stopTool(\\'' + t.id + '\\')">STOP</button>' +
+                '<button onclick="stopTool(\\'' + t.id + '\\')" aria-label="Stop ' + t.name + '">STOP</button>' +
               '</div>';
             }).join('');
           }
@@ -580,6 +644,33 @@ app.get("/", (req, res) => {
               .then(data => {
                 console.log('Tool stopped:', data);
               });
+          }
+
+          function syncMemory() {
+            const btn = document.querySelector('.sync-btn');
+            const originalText = btn.innerText;
+            btn.innerText = 'SYNCING...';
+            btn.disabled = true;
+
+            socket.emit('tool:call', {
+              toolId: 'core-memory-bridge',
+              method: 'callTool',
+              params: {
+                name: 'memory_ingest',
+                arguments: {
+                  sessionId: 'dashboard-sync',
+                  message: 'Manual Sync triggered from HMIC Dashboard.'
+                }
+              }
+            });
+
+            setTimeout(() => {
+              btn.innerText = 'SYNC COMPLETE';
+              setTimeout(() => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+              }, 2000);
+            }, 3000);
           }
         </script>
       </body>

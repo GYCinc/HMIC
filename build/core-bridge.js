@@ -15,7 +15,6 @@ if (!API_KEY) {
 let SESSION_ID = null;
 let isConnected = false;
 // Mock EventSource with Auth and Session
-// @ts-ignore
 global.EventSource = class AuthenticatedEventSource extends eventsource_1.EventSource {
     constructor(url, eventSourceInitDict) {
         const headers = {
@@ -130,3 +129,4 @@ async function main() {
     }
 }
 main();
+//# sourceMappingURL=core-bridge.js.map
