@@ -581,7 +581,7 @@ app.post("/api/tools/:toolId/stop", async (req, res) => {
 app.get("/", (req, res) => {
   res.send(`
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
       <head>
         <title>HMIC // COMMAND CENTER</title>
         <style>
@@ -662,6 +662,10 @@ app.get("/", (req, res) => {
             button:hover {
               background: var(--text);
             }
+            button:focus-visible {
+              outline: 2px solid var(--text);
+              outline-offset: 2px;
+            }
             .core-frame {
               width: 100%;
               height: 300px;
@@ -690,7 +694,7 @@ app.get("/", (req, res) => {
             <div>Active Tools: <span id="activeTools">0</span></div>
             
             <div class="panel-title" style="margin-top:20px">CORE MEMORY</div>
-            <iframe class="core-frame" src="https://getcore.me"></iframe>
+            <iframe class="core-frame" src="https://getcore.me" title="Core Memory Visualization"></iframe>
             <button class="sync-btn" onclick="syncMemory()">SYNC VISUALIZATION</button>
           </div>
           <div class="panel">
@@ -738,7 +742,7 @@ app.get("/", (req, res) => {
               return '<div class="tool-item">' +
                 '<strong class="status-' + t.status + '">' + t.name + '</strong><br>' +
                 '<small>' + t.status.toUpperCase() + ' (PID: ' + (t.pid || 'N/A') + ')</small><br>' +
-                '<button onclick="stopTool(\\'' + t.id + '\\')">STOP</button>' +
+                '<button onclick="stopTool(\\'' + t.id + '\\')" aria-label="Stop ' + t.name + '">STOP</button>' +
               '</div>';
             }).join('');
           }
