@@ -224,10 +224,6 @@ class ToolManager {
 
   private async loadConfig() {
     try {
-      if (!fs.existsSync(TOOL_CONFIG_PATH)) {
-        await this.loadDefaultConfig();
-        return;
-      }
       const configContent = await fs.promises.readFile(
         TOOL_CONFIG_PATH,
         "utf8"
@@ -237,7 +233,11 @@ class ToolManager {
       if (error) throw new Error(`Config validation failed: ${error.message}`);
       await this.updateTools(value.tools);
       logger.info(`Loaded ${value.tools.length} tool configurations`);
-    } catch (e) {
+    } catch (e: any) {
+      if (e.code === "ENOENT") {
+        await this.loadDefaultConfig();
+        return;
+      }
       logger.error(`Failed to load config: ${e}`);
       await this.loadDefaultConfig();
     }
