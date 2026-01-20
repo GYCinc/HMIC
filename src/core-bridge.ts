@@ -20,7 +20,7 @@ let SESSION_ID: string | null = null;
 let isConnected = false;
 
 // Mock EventSource with Auth and Session
-global.EventSource = class AuthenticatedEventSource extends EventSource {
+(global as any).EventSource = class AuthenticatedEventSource extends EventSource {
   constructor(url: string | URL, eventSourceInitDict?: any) {
     const headers = {
       Authorization: `Bearer ${API_KEY}`,
