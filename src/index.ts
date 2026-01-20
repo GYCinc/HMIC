@@ -277,15 +277,22 @@ class ToolManager {
     }
 
     // Start or update tools
-    for (const toolConfig of newTools) {
-      if (!this.tools.has(toolConfig.id)) {
-        await this.startTool(toolConfig);
-      } else {
-        const existing = this.tools.get(toolConfig.id)!;
-        existing.config = toolConfig;
-        this.tools.set(toolConfig.id, existing);
-      }
-    }
+    await Promise.all(
+      newTools.map(async (toolConfig) => {
+        if (!this.tools.has(toolConfig.id)) {
+          try {
+            await this.startTool(toolConfig);
+          } catch (e) {
+            // Error logged in startTool, but we ensure one failure doesn't stop others
+            logger.error(`Failed to start tool ${toolConfig.id}: ${e}`);
+          }
+        } else {
+          const existing = this.tools.get(toolConfig.id)!;
+          existing.config = toolConfig;
+          this.tools.set(toolConfig.id, existing);
+        }
+      })
+    );
   }
 
   private async startTool(config: ToolConfig): Promise<ActiveTool> {
