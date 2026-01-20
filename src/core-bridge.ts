@@ -20,7 +20,7 @@ let SESSION_ID: string | null = null;
 let isConnected = false;
 
 // Mock EventSource with Auth and Session
-global.EventSource = class AuthenticatedEventSource extends EventSource {
+(global as any).EventSource = class AuthenticatedEventSource extends EventSource {
   constructor(url: string | URL, eventSourceInitDict?: any) {
     const headers = {
       Authorization: `Bearer ${API_KEY}`,
@@ -30,7 +30,7 @@ global.EventSource = class AuthenticatedEventSource extends EventSource {
     };
     super(url, { ...eventSourceInitDict, headers });
   }
-};
+} as any;
 
 const client = new Client(
   { name: "hmic-hub-bridge", version: "1.4.0" },
