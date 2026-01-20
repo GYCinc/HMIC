@@ -166,6 +166,45 @@ let db;
         logger.error(`Failed to initialize SQLite: ${e}`);
     }
 })();
+class LogBuffer {
+    constructor(io, prefix) {
+        this.io = io;
+        this.prefix = prefix;
+        this.buffer = [];
+        this.flushInterval = null;
+        this.FLUSH_DELAY = 100; // ms
+        this.MAX_BUFFER_SIZE = 1000;
+    }
+    log(msg) {
+        if (!msg)
+            return;
+        this.buffer.push(`${this.prefix} ${msg}`);
+        this.checkFlush();
+    }
+    checkFlush() {
+        if (this.buffer.length >= this.MAX_BUFFER_SIZE) {
+            this.flush();
+        }
+        else if (!this.flushInterval) {
+            this.flushInterval = setTimeout(() => this.flush(), this.FLUSH_DELAY);
+        }
+    }
+    flush() {
+        if (this.buffer.length === 0)
+            return;
+        const combinedMsg = this.buffer.join('\n');
+        this.io.emit("log", combinedMsg);
+        this.buffer = [];
+        if (this.flushInterval) {
+            clearTimeout(this.flushInterval);
+            this.flushInterval = null;
+        }
+    }
+    // Ensure any remaining logs are sent before destruction
+    dispose() {
+        this.flush();
+    }
+}
 class ToolManager {
     constructor() {
         this.tools = new Map();
@@ -271,19 +310,19 @@ class ToolManager {
             activeTool.process = child;
             activeTool.pid = child.pid;
             activeTool.status = "running";
+            const logBuffer = new LogBuffer(io, `[${config.name}]`);
+            const errBuffer = new LogBuffer(io, `[${config.name} ERR]`);
             child.stdout?.on("data", (data) => {
                 const msg = data.toString().trim();
-                if (msg) {
-                    io.emit("log", `[${config.name}] ${msg}`);
-                }
+                logBuffer.log(msg);
             });
             child.stderr?.on("data", (data) => {
                 const msg = data.toString().trim();
-                if (msg) {
-                    io.emit("log", `[${config.name} ERR] ${msg}`);
-                }
+                errBuffer.log(msg);
             });
             child.on("close", async (code) => {
+                logBuffer.dispose();
+                errBuffer.dispose();
                 logger.warn(`Tool ${config.name} exited with code ${code}`);
                 activeTool.status = "stopped";
                 activeTool.process = undefined;
@@ -488,6 +527,7 @@ app.get("/", (req, res) => {
               margin-bottom: 3px; 
               border-left: 2px solid var(--dim); 
               padding-left: 5px; 
+              white-space: pre-wrap;
             }
             .log-err { 
               color: var(--err); 
@@ -506,6 +546,19 @@ app.get("/", (req, res) => {
             button:hover {
               background: var(--text);
             }
+            .core-frame {
+              width: 100%;
+              height: 300px;
+              border: 1px solid var(--dim);
+              background: #000;
+            }
+            .sync-btn {
+              background: var(--text);
+              color: #000;
+              width: 100%;
+              padding: 10px;
+              margin-top: 10px;
+            }
         </style>
       </head>
       <body>
@@ -519,6 +572,10 @@ app.get("/", (req, res) => {
             <div>MEM: <span id="mem">--</span>MB</div>
             <div>Requests: <span id="requests">0</span></div>
             <div>Active Tools: <span id="activeTools">0</span></div>
+
+            <div class="panel-title" style="margin-top:20px">CORE MEMORY</div>
+            <iframe class="core-frame" src="https://getcore.me"></iframe>
+            <button class="sync-btn" onclick="syncMemory()">SYNC VISUALIZATION</button>
           </div>
           <div class="panel">
             <div class="panel-title">LIVE FEED</div>
@@ -580,6 +637,33 @@ app.get("/", (req, res) => {
               .then(data => {
                 console.log('Tool stopped:', data);
               });
+          }
+
+          function syncMemory() {
+            const btn = document.querySelector('.sync-btn');
+            const originalText = btn.innerText;
+            btn.innerText = 'SYNCING...';
+            btn.disabled = true;
+
+            socket.emit('tool:call', {
+              toolId: 'core-memory-bridge',
+              method: 'callTool',
+              params: {
+                name: 'memory_ingest',
+                arguments: {
+                  sessionId: 'dashboard-sync',
+                  message: 'Manual Sync triggered from HMIC Dashboard.'
+                }
+              }
+            });
+
+            setTimeout(() => {
+              btn.innerText = 'SYNC COMPLETE';
+              setTimeout(() => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+              }, 2000);
+            }, 3000);
           }
         </script>
       </body>

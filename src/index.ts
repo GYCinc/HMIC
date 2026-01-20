@@ -208,6 +208,47 @@ interface ActiveTool {
   pid?: number;
 }
 
+class LogBuffer {
+  private buffer: string[] = [];
+  private flushInterval: NodeJS.Timeout | null = null;
+  private readonly FLUSH_DELAY = 100; // ms
+  private readonly MAX_BUFFER_SIZE = 1000;
+
+  constructor(private io: Server, private prefix: string) {}
+
+  log(msg: string) {
+    if (!msg) return;
+    this.buffer.push(`${this.prefix} ${msg}`);
+    this.checkFlush();
+  }
+
+  private checkFlush() {
+    if (this.buffer.length >= this.MAX_BUFFER_SIZE) {
+      this.flush();
+    } else if (!this.flushInterval) {
+      this.flushInterval = setTimeout(() => this.flush(), this.FLUSH_DELAY);
+    }
+  }
+
+  private flush() {
+    if (this.buffer.length === 0) return;
+
+    const combinedMsg = this.buffer.join('\n');
+    this.io.emit("log", combinedMsg);
+
+    this.buffer = [];
+    if (this.flushInterval) {
+      clearTimeout(this.flushInterval);
+      this.flushInterval = null;
+    }
+  }
+
+  // Ensure any remaining logs are sent before destruction
+  dispose() {
+    this.flush();
+  }
+}
+
 class ToolManager {
   private tools = new Map<string, ActiveTool>();
   private configWatcher: chokidar.FSWatcher;
@@ -329,21 +370,23 @@ class ToolManager {
       activeTool.pid = child.pid;
       activeTool.status = "running";
 
+      const logBuffer = new LogBuffer(io, `[${config.name}]`);
+      const errBuffer = new LogBuffer(io, `[${config.name} ERR]`);
+
       child.stdout?.on("data", (data: Buffer) => {
         const msg = data.toString().trim();
-        if (msg) {
-          io.emit("log", `[${config.name}] ${msg}`);
-        }
+        logBuffer.log(msg);
       });
 
       child.stderr?.on("data", (data: Buffer) => {
         const msg = data.toString().trim();
-        if (msg) {
-          io.emit("log", `[${config.name} ERR] ${msg}`);
-        }
+        errBuffer.log(msg);
       });
 
       child.on("close", async (code: number) => {
+        logBuffer.dispose();
+        errBuffer.dispose();
+
         logger.warn(`Tool ${config.name} exited with code ${code}`);
         activeTool.status = "stopped";
         activeTool.process = undefined;
@@ -598,6 +641,7 @@ app.get("/", (req, res) => {
               margin-bottom: 3px; 
               border-left: 2px solid var(--dim); 
               padding-left: 5px; 
+              white-space: pre-wrap;
             }
             .log-err { 
               color: var(--err); 
