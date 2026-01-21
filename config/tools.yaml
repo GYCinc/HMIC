@@ -3,17 +3,17 @@ tools:
   - id: filesystem
     name: Filesystem Server
     description: MCP filesystem access
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "${DATA_DIR}"]
+    command: node
+    args: ["node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "${DATA_DIR}"]
     resource_limits:
       auto_restart: true
       max_restarts: 3
   - id: core-memory-bridge
     name: Core Memory Bridge
-    command: npx
+    command: node
     args:
-      - ts-node
-      - ${DATA_DIR}/src/core-bridge.ts
+      - node_modules/ts-node/dist/bin.js
+      - src/core-bridge.ts
     env:
       CORE_API_KEY: ${CORE_API_KEY}
     resource_limits:
