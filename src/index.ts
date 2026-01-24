@@ -31,6 +31,7 @@ const logger = pino({
 // --- CONFIGURATION ---
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.resolve("data");
 const CONFIG_PATH = process.env.CONFIG_PATH || path.resolve("config");
+const CORE_DASHBOARD_URL = process.env.CORE_DASHBOARD_URL || "https://getcore.me";
 const DB_PATH = path.join(DATA_DIR, "hmic.db");
 const TOOL_CONFIG_PATH = path.join(CONFIG_PATH, "tools.yaml");
 const VAR_EXPANSION_REGEX = /\${(\w+)}/g;
@@ -787,7 +788,7 @@ app.get("/", (req, res) => {
             <div>Active Tools: <span id="activeTools">0</span></div>
             
             <div class="panel-title" style="margin-top:20px">CORE MEMORY</div>
-            <iframe class="core-frame" src="https://getcore.me" title="Core Memory Visualization"></iframe>
+            <iframe class="core-frame" src="${CORE_DASHBOARD_URL}" title="Core Memory Visualization"></iframe>
             <button class="sync-btn" onclick="syncMemory()">SYNC VISUALIZATION</button>
           </div>
           <div class="panel">
@@ -795,21 +796,76 @@ app.get("/", (req, res) => {
             <div id="logs"></div>
           </div>
         </div>
+
+        <!-- VISUAL BUILDER MODAL -->
+        <div id="builderModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:100;">
+            <div style="background:var(--term); border:1px solid var(--text); margin:50px auto; width:80%; height:80%; padding:20px; display:flex; flex-direction:column;">
+                <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--dim); padding-bottom:10px;">
+                    <div class="panel-title" style="margin:0;">VISUAL TOOL BUILDER</div>
+                    <button onclick="document.getElementById('builderModal').style.display='none'" style="background:var(--err); color:#fff;">CLOSE</button>
+                </div>
+                <div style="display:flex; gap:20px; flex:1; overflow:hidden; margin-top:10px;">
+                    <div style="width:300px; border-right:1px solid var(--dim); overflow-y:auto; padding-right:10px;">
+                        <h3>1. Select Tool Host</h3>
+                        <select id="builderHostSelect" style="width:100%; background:#000; color:var(--text); padding:5px; margin-bottom:10px;" onchange="loadHostTools()">
+                            <option value="">-- Select Host --</option>
+                        </select>
+                        <h3>2. Select Function</h3>
+                        <div id="builderToolList"></div>
+                    </div>
+                    <div style="flex:1; overflow-y:auto; padding-left:10px;">
+                        <h3>3. Configure & Run</h3>
+                        <div id="builderForm">Select a function to configure...</div>
+                        <div id="builderResult" style="margin-top:20px; border:1px solid var(--dim); padding:10px; background:#000; display:none;">
+                            <strong>RESULT:</strong>
+                            <pre id="builderResultContent" style="white-space:pre-wrap;"></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <button onclick="openBuilder()" style="position:fixed; bottom:20px; right:20px; z-index:50; background:var(--text); color:#000; padding:15px 30px; font-size:16px; border:2px solid #000;">OPEN VISUAL BUILDER</button>
+
         <script src="/socket.io/socket.io.js"></script>
         <script>
           const socket = io();
           const logs = document.getElementById('logs');
+          let availableHosts = [];
           
           socket.on('init', function(data) { 
+            availableHosts = data.tools;
             renderTools(data.tools); 
             updateMetrics(data.metrics);
+            updateBuilderHosts();
           });
           
           socket.on('tool_status', function(data) {
             // Refresh tool list when status changes
             fetch('/api/tools')
               .then(res => res.json())
-              .then(tools => renderTools(tools));
+              .then(tools => {
+                  availableHosts = tools;
+                  renderTools(tools);
+                  updateBuilderHosts();
+              });
+          });
+
+          socket.on('tool:result', function(data) {
+              if (data.method === 'tools/list' && data.success) {
+                  renderHostTools(data.toolId, data.result.tools);
+              } else if (data.method === 'callTool') {
+                  const resBox = document.getElementById('builderResult');
+                  const resContent = document.getElementById('builderResultContent');
+                  resBox.style.display = 'block';
+                  if (data.success) {
+                      resContent.style.color = 'var(--text)';
+                      resContent.innerText = JSON.stringify(data.result, null, 2);
+                  } else {
+                      resContent.style.color = 'var(--err)';
+                      resContent.innerText = 'ERROR: ' + data.error;
+                  }
+              }
           });
           
           socket.on('metrics', function(data) {
@@ -849,6 +905,135 @@ app.get("/", (req, res) => {
               .then(res => res.json())
               .then(data => {
                 console.log('Tool stopped:', data);
+              });
+          }
+
+          // --- VISUAL BUILDER FUNCTIONS ---
+          function openBuilder() {
+              document.getElementById('builderModal').style.display = 'block';
+              updateBuilderHosts();
+          }
+
+          function updateBuilderHosts() {
+              const sel = document.getElementById('builderHostSelect');
+              const current = sel.value;
+              sel.innerHTML = '<option value="">-- Select Host --</option>';
+              availableHosts.forEach(t => {
+                  if (t.status === 'running') {
+                      const opt = document.createElement('option');
+                      opt.value = t.id;
+                      opt.text = t.name;
+                      sel.appendChild(opt);
+                  }
+              });
+              sel.value = current;
+          }
+
+          function loadHostTools() {
+              const hostId = document.getElementById('builderHostSelect').value;
+              document.getElementById('builderToolList').innerHTML = 'Loading...';
+              document.getElementById('builderForm').innerHTML = 'Select a function...';
+              document.getElementById('builderResult').style.display = 'none';
+
+              if (!hostId) return;
+
+              // Request tool list from server
+              socket.emit('tool:call', {
+                  toolId: hostId,
+                  method: 'tools/list',
+                  params: {}
+              });
+          }
+
+          function renderHostTools(hostId, tools) {
+              const list = document.getElementById('builderToolList');
+              list.innerHTML = '';
+              tools.forEach(tool => {
+                  const btn = document.createElement('div');
+                  btn.className = 'tool-item';
+                  btn.style.cursor = 'pointer';
+                  btn.innerHTML = '<strong>' + tool.name + '</strong><br><small>' + (tool.description || '').substring(0, 50) + '...</small>';
+                  btn.onclick = () => renderToolForm(hostId, tool);
+                  list.appendChild(btn);
+              });
+          }
+
+          function renderToolForm(hostId, tool) {
+              const formDiv = document.getElementById('builderForm');
+              formDiv.innerHTML = '<h3>Configure: ' + tool.name + '</h3><p>' + (tool.description || '') + '</p>';
+
+              const schema = tool.inputSchema || {};
+              const props = schema.properties || {};
+              const required = schema.required || [];
+
+              const form = document.createElement('form');
+              form.onsubmit = (e) => {
+                  e.preventDefault();
+                  const formData = new FormData(form);
+                  const args = {};
+                  for (let [key, value] of formData.entries()) {
+                      // Basic type conversion
+                      if (props[key] && props[key].type === 'number') value = Number(value);
+                      if (props[key] && props[key].type === 'boolean') value = (value === 'on');
+                      if (value !== '') args[key] = value;
+                  }
+
+                  runTool(hostId, tool.name, args);
+              };
+
+              Object.keys(props).forEach(key => {
+                  const field = props[key];
+                  const div = document.createElement('div');
+                  div.style.marginBottom = '10px';
+
+                  const label = document.createElement('label');
+                  label.innerText = key + (required.includes(key) ? '*' : '') + ': ';
+                  label.style.display = 'block';
+                  label.style.color = 'var(--dim)';
+
+                  let input;
+                  if (field.type === 'boolean') {
+                      input = document.createElement('input');
+                      input.type = 'checkbox';
+                  } else {
+                      input = document.createElement('input');
+                      input.type = 'text';
+                      input.style.width = '100%';
+                      input.style.background = '#000';
+                      input.style.border = '1px solid var(--dim)';
+                      input.style.color = 'var(--text)';
+                      input.style.padding = '5px';
+                      if (field.description) input.placeholder = field.description;
+                  }
+                  input.name = key;
+                  if (required.includes(key)) input.required = true;
+
+                  div.appendChild(label);
+                  div.appendChild(input);
+                  form.appendChild(div);
+              });
+
+              const submit = document.createElement('button');
+              submit.innerText = 'RUN TOOL';
+              submit.style.marginTop = '10px';
+              submit.style.width = '100%';
+
+              form.appendChild(submit);
+              formDiv.appendChild(form);
+          }
+
+          function runTool(hostId, toolName, args) {
+              const resContent = document.getElementById('builderResultContent');
+              resContent.innerText = 'Running...';
+              document.getElementById('builderResult').style.display = 'block';
+
+              socket.emit('tool:call', {
+                  toolId: hostId,
+                  method: 'callTool',
+                  params: {
+                      name: toolName,
+                      arguments: args
+                  }
               });
           }
 
