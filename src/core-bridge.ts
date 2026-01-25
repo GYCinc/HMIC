@@ -9,7 +9,7 @@ import {
 import { EventSource } from "eventsource";
 
 const API_KEY = process.env.CORE_API_KEY;
-const CORE_ENDPOINT = "https://mcp.getcore.me/api/v1/mcp";
+const CORE_ENDPOINT = process.env.CORE_ENDPOINT || "https://mcp.getcore.me/api/v1/mcp";
 
 if (!API_KEY) {
   console.error("Error: CORE_API_KEY environment variable is required.");
