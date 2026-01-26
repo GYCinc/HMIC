@@ -297,18 +297,18 @@ class ToolManager {
         {
           id: "filesystem",
           name: "Filesystem",
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/server-filesystem", DATA_DIR],
+          command: "node",
+          args: ["node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", DATA_DIR],
           resource_limits: { auto_restart: true, max_restarts: 3 },
         },
-        {
-          id: "brave-search",
-          name: "Brave Search",
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/server-brave-search"],
-          env: { BRAVE_API_KEY: process.env.BRAVE_API_KEY || "" },
-          resource_limits: { auto_restart: true, max_restarts: 3 },
-        },
+        // {
+        //   id: "brave-search",
+        //   name: "Brave Search",
+        //   command: "npx",
+        //   args: ["-y", "@modelcontextprotocol/server-brave-search"],
+        //   env: { BRAVE_API_KEY: process.env.BRAVE_API_KEY || "" },
+        //   resource_limits: { auto_restart: true, max_restarts: 3 },
+        // },
       ],
     };
     await this.updateTools(defaultConfig.tools);
