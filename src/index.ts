@@ -20,7 +20,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { PassThrough } from "stream";
-import { getDashboardHtml } from "./dashboard-template";
 
 dotenv.config();
 
