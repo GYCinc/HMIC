@@ -3,6 +3,9 @@ FROM node:20-slim
 
 WORKDIR /app
 
+# Allow pip to install system-wide packages (PEP 668)
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
 # Install system dependencies
 # Python 3, pip, build tools for native modules (sqlite3, lancedb)
 RUN apt-get update && apt-get install -y \
@@ -18,7 +21,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install HMC Python Dependencies first (layer caching)
 COPY src/hmc/requirements.txt ./src/hmc/requirements.txt
-RUN pip3 install --break-system-packages -r src/hmc/requirements.txt
+RUN pip3 install -r src/hmc/requirements.txt
 # Download spaCy model
 RUN python3 -m spacy download en_core_web_lg
 
