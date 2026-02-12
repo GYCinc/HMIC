@@ -31,6 +31,10 @@ const logger = pino({
 // --- CONFIGURATION ---
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.resolve("data");
 const CONFIG_PATH = process.env.CONFIG_PATH || path.resolve("config");
+const CORE_DASHBOARD_URL = process.env.CORE_DASHBOARD_URL || "https://getcore.me";
+// Pre-rendered Dashboard HTML
+const DASHBOARD_HTML = getDashboardHtml(CORE_DASHBOARD_URL);
+
 const DB_PATH = path.join(DATA_DIR, "hmic.db");
 const TOOL_CONFIG_PATH = path.join(CONFIG_PATH, "tools.yaml");
 const VAR_EXPANSION_REGEX = /\${(\w+)}/g;
@@ -104,7 +108,7 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
 // Rate limiting
 const apiLimiter = rateLimit({
@@ -135,8 +139,29 @@ const requireAuth = (
 
 app.use((req, res, next) => {
   if (req.path === "/health") return next();
+  if (req.path.startsWith("/extract/")) return next();
   requireAuth(req, res, next);
 });
+
+const requireApiKey = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) => {
+  const apiKey = req.headers["x-api-key"] || req.headers["authorization"]?.replace("Bearer ", "");
+  const validKey = process.env.CORE_API_KEY;
+
+  if (!validKey) {
+    // If no key is configured, warn but maybe allow? No, strict by default.
+    logger.warn("CORE_API_KEY not set, rejecting API request");
+    return res.status(500).json({ error: "Server configuration error: API Key not set" });
+  }
+
+  if (!apiKey || apiKey !== validKey) {
+    return res.status(401).json({ error: "Unauthorized: Invalid API Key" });
+  }
+  next();
+};
 
 // --- DATABASE SETUP ---
 let db: any;
@@ -296,18 +321,18 @@ class ToolManager {
         {
           id: "filesystem",
           name: "Filesystem",
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/server-filesystem", DATA_DIR],
+          command: "node",
+          args: ["node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", DATA_DIR],
           resource_limits: { auto_restart: true, max_restarts: 3 },
         },
-        {
-          id: "brave-search",
-          name: "Brave Search",
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/server-brave-search"],
-          env: { BRAVE_API_KEY: process.env.BRAVE_API_KEY || "" },
-          resource_limits: { auto_restart: true, max_restarts: 3 },
-        },
+        // {
+        //   id: "brave-search",
+        //   name: "Brave Search",
+        //   command: "npx",
+        //   args: ["-y", "@modelcontextprotocol/server-brave-search"],
+        //   env: { BRAVE_API_KEY: process.env.BRAVE_API_KEY || "" },
+        //   resource_limits: { auto_restart: true, max_restarts: 3 },
+        // },
       ],
     };
     await this.updateTools(defaultConfig.tools);
@@ -638,6 +663,35 @@ io.on("connection", (socket) => {
     }
   );
 
+  socket.on("chat:message", async (data: { message: string, history: any[] }) => {
+    try {
+        const tools = toolManager.getTools();
+        const toolList = tools.map(t =>
+            `- ${t.config.name} (${t.config.id}): ${t.config.description || "No description"} [Status: ${t.status}]`
+        ).join("\n");
+
+        const systemMessage = {
+            role: "system",
+            content: `You are the MCP Homie. Your job is to help the user discover the capabilities of this MCP server.
+You are chill, helpful, and speak like a homie.
+Here are the currently active tools:
+${toolList}
+
+If the user asks about a specific tool, explain what it does based on its description.
+If the user asks "what can you do?", list the available tools and suggest checking them out in the Visual Builder.
+Keep responses concise and friendly.`
+        };
+
+        const messages = [systemMessage, ...data.history, { role: "user", content: data.message }];
+        const response = await callLLM(messages);
+
+        socket.emit("chat:response", { result: response });
+    } catch (e: any) {
+        logger.error(`Chat error: ${e.message}`);
+        socket.emit("chat:response", { error: "My bad, something went wrong with the AI connection." });
+    }
+  });
+
   socket.on("disconnect", () => {
     logger.info(`Dashboard disconnected: ${socket.id}`);
   });
@@ -670,218 +724,195 @@ app.post("/api/tools/:toolId/stop", async (req, res) => {
   res.json({ success: true, message: `Tool ${toolId} stopped` });
 });
 
+// --- EXTRACTION API ---
+
+// --- LLM PROVIDER INTEGRATION ---
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const MOONSHOT_API_KEY = process.env.MOONSHOT_API_KEY;
+const LLM_PROVIDER = process.env.LLM_PROVIDER || "openrouter"; // 'openrouter' or 'moonshot'
+const LLM_MODEL = process.env.LLM_MODEL || (LLM_PROVIDER === "moonshot" ? "moonshot-v1-8k" : "google/gemini-2.0-flash-001");
+
+async function callLLM(messages: any[]): Promise<string> {
+  let apiUrl: string;
+  let apiKey: string | undefined;
+  let headers: any; // Explicitly any or Record<string, string> compatible with fetch
+  let model: string = LLM_MODEL;
+
+  if (LLM_PROVIDER === "moonshot") {
+    apiUrl = "https://api.moonshot.cn/v1/chat/completions";
+    apiKey = MOONSHOT_API_KEY;
+    if (!apiKey) throw new Error("MOONSHOT_API_KEY is not configured.");
+    headers = {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    };
+  } else {
+    // Default to OpenRouter
+    apiUrl = "https://openrouter.ai/api/v1/chat/completions";
+    apiKey = OPENROUTER_API_KEY;
+    if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured.");
+    headers = {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://hmic.hub", // Required by OpenRouter
+      "X-Title": "HMIC Hub",
+    };
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify({
+        model: model,
+        messages: messages,
+        temperature: 0.7,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`${LLM_PROVIDER.toUpperCase()} API Error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    if (!data.choices || data.choices.length === 0) {
+      throw new Error(`${LLM_PROVIDER.toUpperCase()} returned no choices.`);
+    }
+
+    return data.choices[0].message.content;
+  } catch (error: any) {
+    logger.error(`${LLM_PROVIDER.toUpperCase()} Call Failed: ${error.message}`);
+    throw error;
+  }
+}
+
+async function processExtraction(phase: string, data: any): Promise<any> {
+  logger.info(`Processing extraction phase: ${phase} using ${LLM_PROVIDER}`);
+
+  // Construct prompts based on phase
+  let systemPrompt = "You are an expert educational analyst. Extract key information from the provided transcript.";
+  let userPrompt = "";
+
+  if (phase === "phase1") {
+    systemPrompt += " Focus on identifying the main topic, key concepts discussed, and any specific questions raised by the student.";
+    userPrompt = `Analyze the following transcript for Student ID: ${(data as any).studentId}.\n\nTRANSCRIPT:\n${(data as any).transcript}\n\nProvide a structured summary in JSON format with keys: 'topic', 'concepts', 'questions', 'summary'.`;
+  } else if (phase === "phase2") {
+    systemPrompt += " Integrate the provided notes with the transcript to deepen the analysis.";
+    userPrompt = `Review the following transcript and notes for Student ID: ${(data as any).studentId}.\n\nTRANSCRIPT:\n${(data as any).transcript}\n\nNOTES:\n${(data as any).notes}\n\nSynthesize the notes with the transcript. Identify how the notes clarify or expand upon the transcript. Return a structured JSON summary.`;
+  } else if (phase === "phase3") {
+    systemPrompt = "You are an expert report generator. Create a comprehensive Markdown report.";
+    userPrompt = `Generate a final Markdown report for Student ID: ${(data as any).studentId} based on the following analysis results.\n\nPHASE 1 RESULT:\n${JSON.stringify((data as any).phase1Result)}\n\nPHASE 2 RESULT:\n${JSON.stringify((data as any).phase2Result)}\n\nThe report should include:\n1. Executive Summary\n2. Key Concepts & Definitions\n3. Detailed Analysis\n4. Action Items / Recommendations\n\nReturn ONLY the Markdown content.`;
+  } else {
+    throw new Error(`Unknown phase: ${phase}`);
+  }
+
+  try {
+    const resultText = await callLLM([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt }
+    ]);
+
+    // For Phase 1 & 2, try to parse JSON if possible, otherwise wrap string
+    if (phase === "phase1" || phase === "phase2") {
+      try {
+        // Attempt to extract JSON from code blocks if present
+        const jsonMatch = resultText.match(/```json\n([\s\S]*?)\n```/) || resultText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            return JSON.parse(jsonMatch[1] || jsonMatch[0]);
+        }
+        return { raw_result: resultText };
+      } catch (e) {
+        logger.warn("Failed to parse LLM JSON response, returning raw text.");
+        return { raw_result: resultText };
+      }
+    }
+
+    // Phase 3 returns Markdown directly (in a wrapper object for the API)
+    return { data: { summary: resultText } };
+
+  } catch (error: any) {
+    logger.error(`Extraction failed during ${phase}: ${error.message}`);
+    // Fallback or re-throw? Re-throw so the API reports the error.
+    throw error;
+  }
+}
+
+const extractRouter = express.Router();
+extractRouter.use(requireApiKey);
+
+extractRouter.post("/phase1", async (req, res) => {
+  try {
+    req.setTimeout(300000); // 5 minutes
+    const { transcript, studentId } = req.body as any;
+    if (!transcript || !studentId) {
+      return res.status(400).json({ error: "Missing transcript or studentId" });
+    }
+    const result = await processExtraction("phase1", { transcript, studentId });
+    res.json({ result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+extractRouter.post("/phase2", async (req, res) => {
+  try {
+    req.setTimeout(300000); // 5 minutes
+    const { transcript, notes, studentId } = req.body as any;
+    if (!transcript || !studentId) {
+      return res.status(400).json({ error: "Missing transcript or studentId" });
+    }
+    const result = await processExtraction("phase2", { transcript, notes, studentId });
+    res.json({ result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+extractRouter.post("/phase3", async (req, res) => {
+  try {
+    req.setTimeout(300000); // 5 minutes
+    const { phase1Result, phase2Result, studentId } = req.body as any;
+    if (!phase1Result || !phase2Result || !studentId) {
+      return res.status(400).json({ error: "Missing phase results or studentId" });
+    }
+    const result = await processExtraction("phase3", { phase1Result, phase2Result, studentId });
+    res.json({ markdown: result.data?.summary || "# Extraction Report\n\n(Mock Data)" });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+extractRouter.post("/full", async (req, res) => {
+  try {
+    req.setTimeout(300000); // 5 minutes
+    const { transcriptJson, transcriptText, notes, studentId } = req.body as any;
+
+    if ((!transcriptJson && !transcriptText) || !studentId) {
+       return res.status(400).json({ error: "Missing transcript (text or json) or studentId" });
+    }
+
+    const transcript = transcriptText || JSON.stringify(transcriptJson);
+    const phase1Result = await processExtraction("phase1", { transcript, studentId });
+    const phase2Result = await processExtraction("phase2", { transcript, notes, studentId });
+    const phase3Output = await processExtraction("phase3", { phase1Result, phase2Result, studentId });
+
+    res.json({
+      phase1Result,
+      phase2Result,
+      phase3Markdown: phase3Output.data?.summary || "# Extraction Report\n\n(Mock Data)"
+    });
+  } catch (error: any) {
+    logger.error(`Full extraction failed: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.use("/extract", extractRouter);
+
 // --- DASHBOARD UI ---
 app.get("/", (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-      <head>
-        <title>HMIC // COMMAND CENTER</title>
-        <style>
-            :root { 
-              --bg: #0a0a0a; 
-              --term: #0f0f0f; 
-              --text: #00ff41; 
-              --dim: #008f11; 
-              --err: #ff0055; 
-              --warn: #ffaa00; 
-            }
-            body { 
-              background: var(--bg); 
-              color: var(--text); 
-              font-family: 'Courier New', monospace; 
-              margin: 0; 
-              padding: 20px; 
-              overflow: hidden; 
-            }
-            .container { 
-              display: grid; 
-              grid-template-columns: 300px 1fr; 
-              gap: 20px; 
-              height: 95vh; 
-            }
-            .panel { 
-              background: var(--term); 
-              border: 1px solid var(--dim); 
-              padding: 15px; 
-              display: flex; 
-              flex-direction: column; 
-            }
-            .panel-title { 
-              border-bottom: 1px solid var(--dim); 
-              padding-bottom: 8px; 
-              margin-bottom: 15px; 
-              text-transform: uppercase; 
-              letter-spacing: 2px; 
-            }
-            .tool-item { 
-              padding: 10px; 
-              border: 1px solid var(--dim); 
-              background: #000; 
-              margin-bottom: 5px; 
-            }
-            .status-running { color: var(--text); } 
-            .status-stopped { color: var(--err); } 
-            .status-starting { color: var(--warn); }
-            .status-error { color: var(--err); }
-            #logs { 
-              flex: 1; 
-              overflow-y: auto; 
-              font-size: 12px; 
-              line-height: 1.4; 
-              background: #000; 
-              padding: 10px; 
-              border: 1px solid var(--dim); 
-            }
-            .log-entry { 
-              margin-bottom: 3px; 
-              border-left: 2px solid var(--dim); 
-              padding-left: 5px; 
-            }
-            .log-err { 
-              color: var(--err); 
-              border-color: var(--err); 
-            }
-            button {
-              background: var(--dim);
-              color: #000;
-              border: none;
-              padding: 8px 12px;
-              cursor: pointer;
-              font-family: inherit;
-              font-weight: bold;
-              margin: 5px 0;
-            }
-            button:hover {
-              background: var(--text);
-            }
-            button:focus-visible {
-              outline: 2px solid var(--text);
-              outline-offset: 2px;
-            }
-            .core-frame {
-              width: 100%;
-              height: 300px;
-              border: 1px solid var(--dim);
-              background: #000;
-            }
-            .sync-btn {
-              background: var(--text);
-              color: #000;
-              width: 100%;
-              padding: 10px;
-              margin-top: 10px;
-            }
-        </style>
-      </head>
-      <body>
-        <h1>HMIC // COMMAND CENTER</h1>
-        <div class="container">
-          <div class="panel">
-            <div class="panel-title">ACTIVE TOOLS</div>
-            <div id="toolList"></div>
-            <div class="panel-title" style="margin-top:20px">METRICS</div>
-            <div>CPU: <span id="cpu">--</span>%</div>
-            <div>MEM: <span id="mem">--</span>MB</div>
-            <div>Requests: <span id="requests">0</span></div>
-            <div>Active Tools: <span id="activeTools">0</span></div>
-            
-            <div class="panel-title" style="margin-top:20px">CORE MEMORY</div>
-            <iframe class="core-frame" src="https://getcore.me" title="Core Memory Visualization"></iframe>
-            <button class="sync-btn" onclick="syncMemory()">SYNC VISUALIZATION</button>
-          </div>
-          <div class="panel">
-            <div class="panel-title">LIVE FEED</div>
-            <div id="logs"></div>
-          </div>
-        </div>
-        <script src="/socket.io/socket.io.js"></script>
-        <script>
-          const socket = io();
-          const logs = document.getElementById('logs');
-          
-          socket.on('init', function(data) { 
-            renderTools(data.tools); 
-            updateMetrics(data.metrics);
-          });
-          
-          socket.on('tool_status', function(data) {
-            // Refresh tool list when status changes
-            fetch('/api/tools')
-              .then(res => res.json())
-              .then(tools => renderTools(tools));
-          });
-          
-          socket.on('metrics', function(data) {
-            document.getElementById('cpu').innerText = data.cpu.toFixed(1);
-            document.getElementById('mem').innerText = (data.memory / 1024 / 1024).toFixed(0);
-            document.getElementById('requests').innerText = data.total_requests;
-            document.getElementById('activeTools').innerText = data.active_tools;
-          });
-          
-          socket.on('log', function(msg) {
-            const div = document.createElement('div');
-            div.className = 'log-entry';
-            if(msg.includes('ERR')) div.classList.add('log-err');
-            const timestamp = new Date().toLocaleTimeString();
-            div.innerHTML = \`[\${timestamp}] \${msg}\`;
-            logs.appendChild(div);
-            logs.scrollTop = logs.scrollHeight;
-          });
-
-          function renderTools(tools) {
-            const toolList = document.getElementById('toolList');
-            toolList.innerHTML = tools.map(function(t) {
-              return '<div class="tool-item">' +
-                '<strong class="status-' + t.status + '">' + t.name + '</strong><br>' +
-                '<small>' + t.status.toUpperCase() + ' (PID: ' + (t.pid || 'N/A') + ')</small><br>' +
-                '<button onclick="stopTool(\\'' + t.id + '\\')" aria-label="Stop ' + t.name + '">STOP</button>' +
-              '</div>';
-            }).join('');
-          }
-          
-          function updateMetrics(metrics) {
-            document.getElementById('requests').innerText = metrics.totalRequests || 0;
-          }
-          
-          function stopTool(toolId) {
-            fetch('/api/tools/' + toolId + '/stop', { method: 'POST' })
-              .then(res => res.json())
-              .then(data => {
-                console.log('Tool stopped:', data);
-              });
-          }
-
-          function syncMemory() {
-            const btn = document.querySelector('.sync-btn');
-            const originalText = btn.innerText;
-            btn.innerText = 'SYNCING...';
-            btn.disabled = true;
-
-            socket.emit('tool:call', {
-              toolId: 'core-memory-bridge',
-              method: 'callTool',
-              params: {
-                name: 'memory_ingest',
-                arguments: {
-                  sessionId: 'dashboard-sync',
-                  message: 'Manual Sync triggered from HMIC Dashboard.'
-                }
-              }
-            });
-
-            setTimeout(() => {
-              btn.innerText = 'SYNC COMPLETE';
-              setTimeout(() => {
-                btn.innerText = originalText;
-                btn.disabled = false;
-              }, 2000);
-            }, 3000);
-          }
-        </script>
-      </body>
-    </html>
-  `);
+  res.send(DASHBOARD_HTML);
 });
 
 // Start server

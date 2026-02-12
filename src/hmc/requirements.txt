@@ -1,0 +1,4 @@
+mcp[cli]
+spacy
+pybkt
+lancedb
