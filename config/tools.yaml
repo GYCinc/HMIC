@@ -21,6 +21,20 @@ tools:
       max_restarts: 5
       max_memory_mb: 512
 
+  - id: hmc-core
+    name: HMC (Python Core)
+    command: python3
+    args:
+      - src/hmc/server.py
+    env:
+      RAILWAY_VOLUME_MOUNT_PATH: ${DATA_DIR}
+      SANITY_API_KEY: ${SANITY_API_KEY}
+    resource_limits:
+      auto_restart: true
+      max_restarts: 3
+      max_memory_mb: 2048
+      max_cpu_percent: 80
+
   # - id: chrome-devtools
   #   name: Chrome DevTools
   #   description: Headless Chrome for web interaction
