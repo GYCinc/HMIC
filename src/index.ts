@@ -664,6 +664,35 @@ io.on("connection", (socket) => {
     }
   );
 
+  socket.on("chat:message", async (data: { message: string, history: any[] }) => {
+    try {
+        const tools = toolManager.getTools();
+        const toolList = tools.map(t =>
+            `- ${t.config.name} (${t.config.id}): ${t.config.description || "No description"} [Status: ${t.status}]`
+        ).join("\n");
+
+        const systemMessage = {
+            role: "system",
+            content: `You are the MCP Homie. Your job is to help the user discover the capabilities of this MCP server.
+You are chill, helpful, and speak like a homie.
+Here are the currently active tools:
+${toolList}
+
+If the user asks about a specific tool, explain what it does based on its description.
+If the user asks "what can you do?", list the available tools and suggest checking them out in the Visual Builder.
+Keep responses concise and friendly.`
+        };
+
+        const messages = [systemMessage, ...data.history, { role: "user", content: data.message }];
+        const response = await callLLM(messages);
+
+        socket.emit("chat:response", { result: response });
+    } catch (e: any) {
+        logger.error(`Chat error: ${e.message}`);
+        socket.emit("chat:response", { error: "My bad, something went wrong with the AI connection." });
+    }
+  });
+
   socket.on("disconnect", () => {
     logger.info(`Dashboard disconnected: ${socket.id}`);
   });

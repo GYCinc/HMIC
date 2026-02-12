@@ -99,6 +99,43 @@ export const getDashboardHtml = (CORE_DASHBOARD_URL: string) => `
               padding: 10px;
               margin-top: 10px;
             }
+            /* HOMIE CHAT STYLES */
+            #homieChatHistory {
+                flex: 1;
+                overflow-y: auto;
+                background: #000;
+                border: 1px solid var(--dim);
+                padding: 10px;
+                margin-bottom: 10px;
+                font-family: 'Courier New', monospace;
+            }
+            .chat-msg {
+                margin-bottom: 8px;
+                padding: 5px;
+                border-radius: 4px;
+            }
+            .chat-user {
+                color: var(--text);
+                border-left: 2px solid var(--text);
+                padding-left: 8px;
+            }
+            .chat-homie {
+                color: var(--warn);
+                border-left: 2px solid var(--warn);
+                padding-left: 8px;
+            }
+            .chat-input-area {
+                display: flex;
+                gap: 10px;
+            }
+            #homieInput {
+                flex: 1;
+                background: #000;
+                border: 1px solid var(--dim);
+                color: var(--text);
+                padding: 10px;
+                font-family: inherit;
+            }
         </style>
       </head>
       <body>
@@ -152,6 +189,22 @@ export const getDashboardHtml = (CORE_DASHBOARD_URL: string) => `
         </div>
 
         <button onclick="openBuilder()" style="position:fixed; bottom:20px; right:20px; z-index:50; background:var(--text); color:#000; padding:15px 30px; font-size:16px; border:2px solid #000;">OPEN VISUAL BUILDER</button>
+        <button onclick="openHomie()" style="position:fixed; bottom:20px; right:260px; z-index:50; background:var(--warn); color:#000; padding:15px 30px; font-size:16px; border:2px solid #000;">HOMIE CHAT</button>
+
+        <!-- HOMIE CHAT MODAL -->
+        <div id="homieModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:100;">
+            <div style="background:var(--term); border:1px solid var(--warn); margin:50px auto; width:60%; height:80%; padding:20px; display:flex; flex-direction:column;">
+                <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--warn); padding-bottom:10px; margin-bottom:10px;">
+                    <div class="panel-title" style="margin:0; color:var(--warn);">MCP HOMIE // CHAT</div>
+                    <button onclick="document.getElementById('homieModal').style.display='none'" style="background:var(--err); color:#fff;">CLOSE</button>
+                </div>
+                <div id="homieChatHistory"></div>
+                <div class="chat-input-area">
+                    <input type="text" id="homieInput" placeholder="Ask Homie about tools..." onkeypress="if(event.key==='Enter') sendHomieMessage()">
+                    <button onclick="sendHomieMessage()" style="background:var(--warn); color:#000;">SEND</button>
+                </div>
+            </div>
+        </div>
 
         <script src="/socket.io/socket.io.js"></script>
         <script>
@@ -388,6 +441,62 @@ export const getDashboardHtml = (CORE_DASHBOARD_URL: string) => `
                 btn.disabled = false;
               }, 2000);
             }, 3000);
+          }
+
+          // --- HOMIE CHAT FUNCTIONS ---
+          let chatHistory = [];
+
+          function openHomie() {
+              document.getElementById('homieModal').style.display = 'block';
+              document.getElementById('homieInput').focus();
+          }
+
+          function sendHomieMessage() {
+              const input = document.getElementById('homieInput');
+              const msg = input.value.trim();
+              if (!msg) return;
+
+              // Append user message
+              appendChatMessage('User', msg);
+              chatHistory.push({ role: 'user', content: msg });
+
+              input.value = '';
+              input.disabled = true;
+
+              socket.emit('chat:message', {
+                  message: msg,
+                  history: chatHistory.slice(0, -1) // Send history excluding current message (handled by server logic usually, but here we just send what we have)
+                  // Actually, better to just send history including the new one, or let server handle.
+                  // Server expects { message, history }
+              });
+          }
+
+          socket.on('chat:response', function(data) {
+              const input = document.getElementById('homieInput');
+              input.disabled = false;
+              input.focus();
+
+              if (data.error) {
+                  appendChatMessage('System', 'Error: ' + data.error);
+              } else {
+                  appendChatMessage('Homie', data.result);
+                  chatHistory.push({ role: 'assistant', content: data.result });
+              }
+          });
+
+          function appendChatMessage(sender, text) {
+              const div = document.createElement('div');
+              div.className = 'chat-msg';
+
+              if (sender === 'User') div.classList.add('chat-user');
+              else if (sender === 'Homie') div.classList.add('chat-homie');
+              else div.style.color = 'var(--err)';
+
+              div.innerHTML = '<strong>' + sender + ':</strong> ' + text.replace(/\\n/g, '<br>');
+
+              const historyDiv = document.getElementById('homieChatHistory');
+              historyDiv.appendChild(div);
+              historyDiv.scrollTop = historyDiv.scrollHeight;
           }
         </script>
       </body>
