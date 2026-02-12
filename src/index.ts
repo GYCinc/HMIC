@@ -109,7 +109,7 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
 // Rate limiting
 const apiLimiter = rateLimit({
@@ -140,8 +140,29 @@ const requireAuth = (
 
 app.use((req, res, next) => {
   if (req.path === "/health") return next();
+  if (req.path.startsWith("/extract/")) return next();
   requireAuth(req, res, next);
 });
+
+const requireApiKey = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) => {
+  const apiKey = req.headers["x-api-key"] || req.headers["authorization"]?.replace("Bearer ", "");
+  const validKey = process.env.CORE_API_KEY;
+
+  if (!validKey) {
+    // If no key is configured, warn but maybe allow? No, strict by default.
+    logger.warn("CORE_API_KEY not set, rejecting API request");
+    return res.status(500).json({ error: "Server configuration error: API Key not set" });
+  }
+
+  if (!apiKey || apiKey !== validKey) {
+    return res.status(401).json({ error: "Unauthorized: Invalid API Key" });
+  }
+  next();
+};
 
 // --- DATABASE SETUP ---
 let db: any;
@@ -674,6 +695,192 @@ app.post("/api/tools/:toolId/stop", async (req, res) => {
   await toolManager.stopTool(toolId);
   res.json({ success: true, message: `Tool ${toolId} stopped` });
 });
+
+// --- EXTRACTION API ---
+
+// --- LLM PROVIDER INTEGRATION ---
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const MOONSHOT_API_KEY = process.env.MOONSHOT_API_KEY;
+const LLM_PROVIDER = process.env.LLM_PROVIDER || "openrouter"; // 'openrouter' or 'moonshot'
+const LLM_MODEL = process.env.LLM_MODEL || (LLM_PROVIDER === "moonshot" ? "moonshot-v1-8k" : "google/gemini-2.0-flash-001");
+
+async function callLLM(messages: any[]): Promise<string> {
+  let apiUrl: string;
+  let apiKey: string | undefined;
+  let headers: any; // Explicitly any or Record<string, string> compatible with fetch
+  let model: string = LLM_MODEL;
+
+  if (LLM_PROVIDER === "moonshot") {
+    apiUrl = "https://api.moonshot.cn/v1/chat/completions";
+    apiKey = MOONSHOT_API_KEY;
+    if (!apiKey) throw new Error("MOONSHOT_API_KEY is not configured.");
+    headers = {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    };
+  } else {
+    // Default to OpenRouter
+    apiUrl = "https://openrouter.ai/api/v1/chat/completions";
+    apiKey = OPENROUTER_API_KEY;
+    if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured.");
+    headers = {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://hmic.hub", // Required by OpenRouter
+      "X-Title": "HMIC Hub",
+    };
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify({
+        model: model,
+        messages: messages,
+        temperature: 0.7,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`${LLM_PROVIDER.toUpperCase()} API Error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    if (!data.choices || data.choices.length === 0) {
+      throw new Error(`${LLM_PROVIDER.toUpperCase()} returned no choices.`);
+    }
+
+    return data.choices[0].message.content;
+  } catch (error: any) {
+    logger.error(`${LLM_PROVIDER.toUpperCase()} Call Failed: ${error.message}`);
+    throw error;
+  }
+}
+
+async function processExtraction(phase: string, data: any): Promise<any> {
+  logger.info(`Processing extraction phase: ${phase} using ${LLM_PROVIDER}`);
+
+  // Construct prompts based on phase
+  let systemPrompt = "You are an expert educational analyst. Extract key information from the provided transcript.";
+  let userPrompt = "";
+
+  if (phase === "phase1") {
+    systemPrompt += " Focus on identifying the main topic, key concepts discussed, and any specific questions raised by the student.";
+    userPrompt = `Analyze the following transcript for Student ID: ${(data as any).studentId}.\n\nTRANSCRIPT:\n${(data as any).transcript}\n\nProvide a structured summary in JSON format with keys: 'topic', 'concepts', 'questions', 'summary'.`;
+  } else if (phase === "phase2") {
+    systemPrompt += " Integrate the provided notes with the transcript to deepen the analysis.";
+    userPrompt = `Review the following transcript and notes for Student ID: ${(data as any).studentId}.\n\nTRANSCRIPT:\n${(data as any).transcript}\n\nNOTES:\n${(data as any).notes}\n\nSynthesize the notes with the transcript. Identify how the notes clarify or expand upon the transcript. Return a structured JSON summary.`;
+  } else if (phase === "phase3") {
+    systemPrompt = "You are an expert report generator. Create a comprehensive Markdown report.";
+    userPrompt = `Generate a final Markdown report for Student ID: ${(data as any).studentId} based on the following analysis results.\n\nPHASE 1 RESULT:\n${JSON.stringify((data as any).phase1Result)}\n\nPHASE 2 RESULT:\n${JSON.stringify((data as any).phase2Result)}\n\nThe report should include:\n1. Executive Summary\n2. Key Concepts & Definitions\n3. Detailed Analysis\n4. Action Items / Recommendations\n\nReturn ONLY the Markdown content.`;
+  } else {
+    throw new Error(`Unknown phase: ${phase}`);
+  }
+
+  try {
+    const resultText = await callLLM([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt }
+    ]);
+
+    // For Phase 1 & 2, try to parse JSON if possible, otherwise wrap string
+    if (phase === "phase1" || phase === "phase2") {
+      try {
+        // Attempt to extract JSON from code blocks if present
+        const jsonMatch = resultText.match(/```json\n([\s\S]*?)\n```/) || resultText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            return JSON.parse(jsonMatch[1] || jsonMatch[0]);
+        }
+        return { raw_result: resultText };
+      } catch (e) {
+        logger.warn("Failed to parse LLM JSON response, returning raw text.");
+        return { raw_result: resultText };
+      }
+    }
+
+    // Phase 3 returns Markdown directly (in a wrapper object for the API)
+    return { data: { summary: resultText } };
+
+  } catch (error: any) {
+    logger.error(`Extraction failed during ${phase}: ${error.message}`);
+    // Fallback or re-throw? Re-throw so the API reports the error.
+    throw error;
+  }
+}
+
+const extractRouter = express.Router();
+extractRouter.use(requireApiKey);
+
+extractRouter.post("/phase1", async (req, res) => {
+  try {
+    req.setTimeout(300000); // 5 minutes
+    const { transcript, studentId } = req.body as any;
+    if (!transcript || !studentId) {
+      return res.status(400).json({ error: "Missing transcript or studentId" });
+    }
+    const result = await processExtraction("phase1", { transcript, studentId });
+    res.json({ result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+extractRouter.post("/phase2", async (req, res) => {
+  try {
+    req.setTimeout(300000); // 5 minutes
+    const { transcript, notes, studentId } = req.body as any;
+    if (!transcript || !studentId) {
+      return res.status(400).json({ error: "Missing transcript or studentId" });
+    }
+    const result = await processExtraction("phase2", { transcript, notes, studentId });
+    res.json({ result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+extractRouter.post("/phase3", async (req, res) => {
+  try {
+    req.setTimeout(300000); // 5 minutes
+    const { phase1Result, phase2Result, studentId } = req.body as any;
+    if (!phase1Result || !phase2Result || !studentId) {
+      return res.status(400).json({ error: "Missing phase results or studentId" });
+    }
+    const result = await processExtraction("phase3", { phase1Result, phase2Result, studentId });
+    res.json({ markdown: result.data?.summary || "# Extraction Report\n\n(Mock Data)" });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+extractRouter.post("/full", async (req, res) => {
+  try {
+    req.setTimeout(300000); // 5 minutes
+    const { transcriptJson, transcriptText, notes, studentId } = req.body as any;
+
+    if ((!transcriptJson && !transcriptText) || !studentId) {
+       return res.status(400).json({ error: "Missing transcript (text or json) or studentId" });
+    }
+
+    const transcript = transcriptText || JSON.stringify(transcriptJson);
+    const phase1Result = await processExtraction("phase1", { transcript, studentId });
+    const phase2Result = await processExtraction("phase2", { transcript, notes, studentId });
+    const phase3Output = await processExtraction("phase3", { phase1Result, phase2Result, studentId });
+
+    res.json({
+      phase1Result,
+      phase2Result,
+      phase3Markdown: phase3Output.data?.summary || "# Extraction Report\n\n(Mock Data)"
+    });
+  } catch (error: any) {
+    logger.error(`Full extraction failed: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.use("/extract", extractRouter);
 
 // --- DASHBOARD UI ---
 app.get("/", (req, res) => {
