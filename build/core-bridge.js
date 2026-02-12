@@ -7,7 +7,7 @@ const index_js_2 = require("@modelcontextprotocol/sdk/server/index.js");
 const types_js_1 = require("@modelcontextprotocol/sdk/types.js");
 const eventsource_1 = require("eventsource");
 const API_KEY = process.env.CORE_API_KEY;
-const CORE_ENDPOINT = "https://mcp.getcore.me/api/v1/mcp";
+const CORE_ENDPOINT = process.env.CORE_ENDPOINT || "https://mcp.getcore.me/api/v1/mcp";
 if (!API_KEY) {
     console.error("Error: CORE_API_KEY environment variable is required.");
     process.exit(1);

@@ -20,6 +20,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { PassThrough } from "stream";
+import { getDashboardHtml } from "./dashboard-template";
 
 dotenv.config();
 
@@ -775,7 +776,7 @@ async function callLLM(messages: any[]): Promise<string> {
       throw new Error(`${LLM_PROVIDER.toUpperCase()} API Error: ${response.status} - ${errorText}`);
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     if (!data.choices || data.choices.length === 0) {
       throw new Error(`${LLM_PROVIDER.toUpperCase()} returned no choices.`);
     }
