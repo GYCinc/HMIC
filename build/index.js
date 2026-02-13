@@ -146,6 +146,8 @@ let db;
             filename: DB_PATH,
             driver: sqlite3_1.default.Database,
         });
+        // Enable WAL mode for better concurrency and performance
+        await db.exec('PRAGMA journal_mode = WAL;');
         await db.exec(`
       CREATE TABLE IF NOT EXISTS history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -181,6 +183,12 @@ let db;
         pid INTEGER,
         restart_count INTEGER DEFAULT 0
       );
+
+      CREATE TRIGGER IF NOT EXISTS limit_metrics_size
+      AFTER INSERT ON metrics
+      BEGIN
+        DELETE FROM metrics WHERE id <= NEW.id - 5000;
+      END;
     `);
         logger.info(`Database initialized at ${DB_PATH}`);
         await cleanupMetrics();
