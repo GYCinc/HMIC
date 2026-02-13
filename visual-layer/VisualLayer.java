@@ -28,7 +28,7 @@ public class VisualLayer {
 
         server.createContext("/", new DashboardHandler());
         server.createContext("/api/proxy", new ProxyHandler());
-        server.setExecutor(Executors.newCachedThreadPool());
+        server.setExecutor(Executors.newFixedThreadPool(50));
         server.start();
 
         System.out.println("Java Visual Layer started on port " + port);
