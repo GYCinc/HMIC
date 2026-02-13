@@ -109,6 +109,14 @@ app.use(
   })
 );
 
+// Prevent Express from interfering with Socket.IO requests
+app.use((req, res, next) => {
+  if (req.path.startsWith("/socket.io/")) {
+    return;
+  }
+  next();
+});
+
 app.use(express.json({ limit: "50mb" }));
 
 // Rate limiting
