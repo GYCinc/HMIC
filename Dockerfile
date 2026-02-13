@@ -20,8 +20,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install HMC Python Dependencies first (layer caching)
-COPY src/hmc/requirements.txt ./src/hmc/requirements.txt
-RUN pip3 install -r src/hmc/requirements.txt
+COPY src/hmic/requirements.txt ./src/hmic/requirements.txt
+RUN pip3 install -r src/hmic/requirements.txt
 # Download spaCy model
 RUN python3 -m spacy download en_core_web_lg
 
