@@ -742,6 +742,42 @@ app.post("/api/tools/:toolId/stop", async (req, res) => {
   res.json({ success: true, message: `Tool ${toolId} stopped` });
 });
 
+app.get("/api/mcp/tools", async (req, res) => {
+  const toolResults = await Promise.all(
+    toolManager.getTools().map(async (tool) => {
+      const toolInfo = {
+        server: tool.config.id,
+        serverName: tool.config.name,
+        status: tool.status,
+        tools: [] as any[],
+        error: undefined as string | undefined,
+      };
+
+      if (tool.status === "running" && tool.client) {
+        try {
+          // Timeout the listTools call to prevent hanging
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Timeout")), 5000)
+          );
+
+          const result = await Promise.race([
+            tool.client.listTools(),
+            timeoutPromise
+          ]) as any; // Cast to any because Promise.race return type inference
+
+          toolInfo.tools = result.tools;
+        } catch (e: any) {
+          toolInfo.error = `Failed to list tools: ${e.message}`;
+        }
+      }
+
+      return toolInfo;
+    })
+  );
+
+  res.json({ servers: toolResults });
+});
+
 // --- EXTRACTION API ---
 
 // --- LLM PROVIDER INTEGRATION ---
