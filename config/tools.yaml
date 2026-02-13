@@ -50,13 +50,13 @@ tools:
       max_memory_mb: 1024
 
   - id: extraction-phase3
-    name: Phase 3 Synthesis (Claude)
-    description: Run Phase 3 synthesis with Claude
+    name: Phase 3 Synthesis (GLM-5)
+    description: Run Phase 3 synthesis with GLM-5
     command: node
     args:
       - src/extraction/phase3.js
     env:
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      ZAI_API_KEY: ${ZAI_API_KEY}
     resource_limits:
       auto_restart: false
       max_restarts: 0
