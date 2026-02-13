@@ -172,6 +172,8 @@ let db;
         total_requests INTEGER,
         error_rate REAL
       );
+      CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics(timestamp);
+
       CREATE TABLE IF NOT EXISTS tool_status (
         tool_id TEXT PRIMARY KEY,
         last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -181,6 +183,7 @@ let db;
       );
     `);
         logger.info(`Database initialized at ${DB_PATH}`);
+        await cleanupMetrics();
     }
     catch (e) {
         logger.error(`Failed to initialize SQLite: ${e}`);
@@ -415,6 +418,19 @@ const metrics = {
     successfulRequests: 0,
     failedRequests: 0,
 };
+async function cleanupMetrics() {
+    if (db) {
+        try {
+            // Keep last 24 hours of metrics
+            await db.run("DELETE FROM metrics WHERE timestamp < datetime('now', '-1 day')");
+        }
+        catch (e) {
+            logger.error(`Failed to cleanup metrics: ${e}`);
+        }
+    }
+}
+// Schedule cleanup every hour
+setInterval(cleanupMetrics, 3600000);
 setInterval(async () => {
     try {
         const stats = await (0, pidusage_1.default)(process.pid);
