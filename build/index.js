@@ -33,7 +33,7 @@ const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path_1.default.resolve
 const CONFIG_PATH = process.env.CONFIG_PATH || path_1.default.resolve("config");
 const CORE_DASHBOARD_URL = process.env.CORE_DASHBOARD_URL || "https://getcore.me";
 // Pre-rendered Dashboard HTML
-const DASHBOARD_HTML = (0, dashboard_template_1.getDashboardHtml)(CORE_DASHBOARD_URL);
+const DASHBOARD_HTML_BUFFER = Buffer.from((0, dashboard_template_1.getDashboardHtml)(CORE_DASHBOARD_URL));
 const DB_PATH = path_1.default.join(DATA_DIR, "hmic.db");
 const TOOL_CONFIG_PATH = path_1.default.join(CONFIG_PATH, "tools.yaml");
 const VAR_EXPANSION_REGEX = /\${(\w+)}/g;
@@ -760,7 +760,7 @@ extractRouter.post("/full", async (req, res) => {
 app.use("/extract", extractRouter);
 // --- DASHBOARD UI ---
 app.get("/", (req, res) => {
-    res.send(DASHBOARD_HTML);
+    res.type('html').send(DASHBOARD_HTML_BUFFER);
 });
 // Start server
 httpServer.listen(port, () => {
