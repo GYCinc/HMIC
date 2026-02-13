@@ -969,6 +969,10 @@ app.get("/", (req, res) => {
   res.type('html').send(DASHBOARD_HTML_BUFFER);
 });
 
+app.get("/dashboard", (req, res) => {
+  res.type('html').send(DASHBOARD_HTML_BUFFER);
+});
+
 // Start server
 httpServer.listen(port, () => {
   logger.info(`HMIC Hub listening on port ${port}`);

@@ -6,11 +6,11 @@ from mcp.server.fastmcp import FastMCP
 
 # Configuration
 VOLUME_PATH = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "/app/data")
-DB_PATH = os.path.join(VOLUME_PATH, "hmc.db")
+DB_PATH = os.path.join(VOLUME_PATH, "hmic.db")
 VECTOR_DB_PATH = os.path.join(VOLUME_PATH, "lancedb")
 
 # Initialize Server
-mcp = FastMCP("hmc-core")
+mcp = FastMCP("hmic-core")
 
 # Database Setup
 def init_db():

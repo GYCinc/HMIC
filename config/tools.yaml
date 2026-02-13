@@ -62,11 +62,11 @@ tools:
       max_restarts: 0
       max_memory_mb: 2048
 
-  - id: hmc-core
-    name: HMC Core (Python)
+  - id: hmic-core
+    name: HMIC Core (Python)
     description: Hybrid Monte Carlo / spaCy / pyBKT Server
     command: python3
-    args: ["src/hmc/server.py"]
+    args: ["src/hmic/server.py"]
     env:
       PYTHONUNBUFFERED: "1"
     resource_limits:
