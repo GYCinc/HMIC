@@ -6,6 +6,14 @@ WORKDIR /app
 # Allow pip to install system-wide packages (PEP 668)
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
+# Define build arguments passed from Railway
+ARG NODE_ENV
+ARG PORT
+ARG LOG_LEVEL
+ARG RAILWAY_STATIC_URL
+ARG RAILWAY_ENVIRONMENT
+ARG RAILWAY_GIT_COMMIT_SHA
+
 # Install system dependencies
 # Python 3, pip, build tools for native modules (sqlite3, lancedb)
 RUN apt-get update && apt-get install -y \
