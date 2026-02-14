@@ -3,18 +3,18 @@ tools:
   - id: filesystem
     name: Filesystem Server
     description: MCP filesystem access
-    command: node
-    args: ["node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "${DATA_DIR}"]
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "${DATA_DIR}"]
     resource_limits:
       auto_restart: true
       max_restarts: 3
 
   - id: core-memory-bridge
     name: Core Memory Bridge
-    command: node
+    command: npx
     args:
-      - node_modules/ts-node/dist/bin.js
-      - src/core-bridge.ts
+      - ts-node
+      - ${DATA_DIR}/src/core-bridge.ts
     env:
       CORE_API_KEY: ${CORE_API_KEY}
     resource_limits:
@@ -28,7 +28,7 @@ tools:
     description: Run Phase 1 diagnostic analysis on transcript
     command: node
     args:
-      - src/extraction/phase1.js
+      - ${DATA_DIR}/src/extraction/phase1.js
     env:
       MOONSHOT_API_KEY: ${MOONSHOT_API_KEY}
     resource_limits:
@@ -41,7 +41,7 @@ tools:
     description: Run Phase 2 content extraction
     command: node
     args:
-      - src/extraction/phase2.js
+      - ${DATA_DIR}/src/extraction/phase2.js
     env:
       MOONSHOT_API_KEY: ${MOONSHOT_API_KEY}
     resource_limits:
@@ -50,25 +50,14 @@ tools:
       max_memory_mb: 1024
 
   - id: extraction-phase3
-    name: Phase 3 Synthesis (GLM-5)
-    description: Run Phase 3 synthesis with GLM-5
+    name: Phase 3 Synthesis (Claude)
+    description: Run Phase 3 synthesis with Claude
     command: node
     args:
-      - src/extraction/phase3.js
+      - ${DATA_DIR}/src/extraction/phase3.js
     env:
-      ZAI_API_KEY: ${ZAI_API_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
     resource_limits:
       auto_restart: false
       max_restarts: 0
       max_memory_mb: 2048
-
-  - id: hmic-core
-    name: HMIC Core (Python)
-    description: Hybrid Monte Carlo / spaCy / pyBKT Server
-    command: python3
-    args: ["src/hmic/server.py"]
-    env:
-      PYTHONUNBUFFERED: "1"
-    resource_limits:
-      auto_restart: true
-      max_restarts: 3
